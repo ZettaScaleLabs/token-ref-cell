@@ -8,12 +8,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{
-    error::{BorrowError, BorrowMutError},
-    Ref, RefMut, TokenCell,
-};
-
-/// Token type to be used with [`TokenCell`].
+/// Token type to be used with [`TokenCell`](crate::TokenCell).
 ///
 /// # Safety
 ///
@@ -26,6 +21,10 @@ pub unsafe trait Token {
     fn id(&self) -> Self::Id;
     /// Returns true if the token is "unique", see [safety](Self#safety)
     fn is_unique(&mut self) -> bool;
+}
+
+pub trait ConstToken: Token {
+    const ID: Self::Id;
 }
 
 /// Wrapper for pointer used as [`Token::Id`] .
@@ -135,7 +134,7 @@ macro_rules! token {
             }
 
             // SAFETY: Each forged token type can only have a single instance
-            unsafe impl $crate::Token for $name {
+            unsafe impl $crate::token::Token for $name {
                 type Id = ();
 
                 fn id(&self) -> Self::Id {}
@@ -143,6 +142,10 @@ macro_rules! token {
                 fn is_unique(&mut self) -> bool {
                     true
                 }
+            }
+
+            impl $crate::token::ConstToken for $name {
+                const ID: Self::Id = ();
             }
         };
     };
@@ -229,113 +232,6 @@ impl<T: ?Sized> RefMutToken<T> {
         // SAFETY: `RefMutToken` is `repr(transparent)`
         unsafe { &mut *(t as *mut T as *mut Self) }
     }
-
-    #[inline]
-    pub fn try_borrow<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(&'a T) -> &'a TokenCell<U, Self>,
-    ) -> Result<Ref<'a, U, Self>, BorrowError> {
-        self.try_borrow_option(|r| Some(cell(r))).unwrap()
-    }
-
-    #[inline]
-    pub fn borrow<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(&'a T) -> &'a TokenCell<U, Self>,
-    ) -> Ref<'a, U, Self> {
-        self.try_borrow(cell).unwrap()
-    }
-
-    #[inline]
-    pub fn try_borrow_option<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(&'a T) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<Result<Ref<'a, U, Self>, BorrowError>> {
-        self.try_borrow_iter(cell).next()
-    }
-
-    #[inline]
-    pub fn borrow_option<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(&'a T) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<Ref<'a, U, Self>> {
-        self.try_borrow_option(cell).map(Result::unwrap)
-    }
-
-    #[inline]
-    pub fn try_borrow_iter<'a, U: ?Sized + 'a, I: IntoIterator<Item = &'a TokenCell<U, Self>>>(
-        &'a self,
-        cells: impl FnOnce(&'a T) -> I,
-    ) -> impl Iterator<Item = Result<Ref<'a, U, Self>, BorrowError>> {
-        let token_id = self.id();
-        cells(self)
-            .into_iter()
-            .map(move |cell| cell.get_ref(token_id))
-    }
-
-    #[inline]
-    pub fn borrow_iter<'a, U: ?Sized + 'a, I: IntoIterator<Item = &'a TokenCell<U, Self>>>(
-        &'a self,
-        cells: impl FnOnce(&'a T) -> I,
-    ) -> impl Iterator<Item = Ref<'a, U, Self>> {
-        self.try_borrow_iter(cells).map(Result::unwrap)
-    }
-
-    #[inline]
-    pub fn try_borrow_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(&'a mut T) -> &'a TokenCell<U, Self>,
-    ) -> Result<RefMut<'a, U, Self>, BorrowMutError> {
-        self.try_borrow_option_mut(|r| Some(cell(r))).unwrap()
-    }
-
-    #[inline]
-    pub fn borrow_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(&'a mut T) -> &'a TokenCell<U, Self>,
-    ) -> RefMut<'a, U, Self> {
-        self.try_borrow_mut(cell).unwrap()
-    }
-
-    #[inline]
-    pub fn try_borrow_option_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(&'a mut T) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<Result<RefMut<'a, U, Self>, BorrowMutError>> {
-        self.try_borrow_iter_mut(cell).next()
-    }
-
-    #[inline]
-    pub fn borrow_option_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(&'a mut T) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<RefMut<'a, U, Self>> {
-        self.try_borrow_option_mut(cell).map(Result::unwrap)
-    }
-
-    #[inline]
-    pub fn try_borrow_iter_mut<
-        'a,
-        U: ?Sized + 'a,
-        I: IntoIterator<Item = &'a TokenCell<U, Self>>,
-    >(
-        &'a mut self,
-        cells: impl FnOnce(&'a mut T) -> I,
-    ) -> impl Iterator<Item = Result<RefMut<'a, U, Self>, BorrowMutError>> {
-        let token_id = self.id();
-        cells(self)
-            .into_iter()
-            // SAFETY: `RefMutToken::is_unique` always returns true
-            .map(move |cell| unsafe { cell.get_mut(token_id) })
-    }
-
-    #[inline]
-    pub fn borrow_iter_mut<'a, U: ?Sized + 'a, I: IntoIterator<Item = &'a TokenCell<U, Self>>>(
-        &'a mut self,
-        cells: impl FnOnce(&'a mut T) -> I,
-    ) -> impl Iterator<Item = RefMut<'a, U, Self>> {
-        self.try_borrow_iter_mut(cells).map(Result::unwrap)
-    }
 }
 
 impl<T: ?Sized> Deref for RefMutToken<T> {
@@ -390,115 +286,6 @@ impl<T: ?Sized> PinToken<T> {
     pub fn from_mut(t: Pin<&mut T>) -> &mut Self {
         // SAFETY: mutable ref is never accessed and `RefMutToken` is `repr(transparent)`
         unsafe { &mut *(t.get_unchecked_mut() as *mut T as *mut Self) }
-    }
-
-    #[inline]
-    pub fn try_borrow<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(Pin<&'a T>) -> &'a TokenCell<U, Self>,
-    ) -> Result<Ref<'a, U, Self>, BorrowError> {
-        self.try_borrow_option(|r| Some(cell(r))).unwrap()
-    }
-
-    #[inline]
-    pub fn borrow<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(Pin<&'a T>) -> &'a TokenCell<U, Self>,
-    ) -> Ref<'a, U, Self> {
-        self.try_borrow(cell).unwrap()
-    }
-
-    #[inline]
-    pub fn try_borrow_option<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(Pin<&'a T>) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<Result<Ref<'a, U, Self>, BorrowError>> {
-        self.try_borrow_iter(cell).next()
-    }
-
-    #[inline]
-    pub fn borrow_option<'a, U: ?Sized>(
-        &'a self,
-        cell: impl FnOnce(Pin<&'a T>) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<Ref<'a, U, Self>> {
-        self.try_borrow_option(cell).map(Result::unwrap)
-    }
-
-    #[inline]
-    pub fn try_borrow_iter<'a, U: ?Sized + 'a, I: IntoIterator<Item = &'a TokenCell<U, Self>>>(
-        &'a self,
-        cells: impl FnOnce(Pin<&'a T>) -> I,
-    ) -> impl Iterator<Item = Result<Ref<'a, U, Self>, BorrowError>> {
-        let token_id = self.id();
-        // SAFETY: `PinToken` is initialized with pin data
-        cells(unsafe { Pin::new_unchecked(self) })
-            .into_iter()
-            .map(move |cell| cell.get_ref(token_id))
-    }
-
-    #[inline]
-    pub fn borrow_iter<'a, U: ?Sized + 'a, I: IntoIterator<Item = &'a TokenCell<U, Self>>>(
-        &'a self,
-        cells: impl FnOnce(Pin<&'a T>) -> I,
-    ) -> impl Iterator<Item = Ref<'a, U, Self>> {
-        self.try_borrow_iter(cells).map(Result::unwrap)
-    }
-
-    #[inline]
-    pub fn try_borrow_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(Pin<&'a mut T>) -> &'a TokenCell<U, Self>,
-    ) -> Result<RefMut<'a, U, Self>, BorrowMutError> {
-        self.try_borrow_option_mut(|r| Some(cell(r))).unwrap()
-    }
-
-    #[inline]
-    pub fn borrow_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(Pin<&'a mut T>) -> &'a TokenCell<U, Self>,
-    ) -> RefMut<'a, U, Self> {
-        self.try_borrow_mut(cell).unwrap()
-    }
-
-    #[inline]
-    pub fn try_borrow_option_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(Pin<&'a mut T>) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<Result<RefMut<'a, U, Self>, BorrowMutError>> {
-        self.try_borrow_iter_mut(cell).next()
-    }
-
-    #[inline]
-    pub fn borrow_option_mut<'a, U: ?Sized>(
-        &'a mut self,
-        cell: impl FnOnce(Pin<&'a mut T>) -> Option<&'a TokenCell<U, Self>>,
-    ) -> Option<RefMut<'a, U, Self>> {
-        self.try_borrow_option_mut(cell).map(Result::unwrap)
-    }
-
-    #[inline]
-    pub fn try_borrow_iter_mut<
-        'a,
-        U: ?Sized + 'a,
-        I: IntoIterator<Item = &'a TokenCell<U, Self>>,
-    >(
-        &'a mut self,
-        cells: impl FnOnce(Pin<&'a mut T>) -> I,
-    ) -> impl Iterator<Item = Result<RefMut<'a, U, Self>, BorrowMutError>> {
-        let token_id = self.id();
-        // SAFETY: `PinToken` is initialized with pin data
-        cells(unsafe { Pin::new_unchecked(self) })
-            .into_iter()
-            // SAFETY: `RefMutToken::is_unique` always returns true
-            .map(move |cell| unsafe { cell.get_mut(token_id) })
-    }
-
-    #[inline]
-    pub fn borrow_iter_mut<'a, U: ?Sized + 'a, I: IntoIterator<Item = &'a TokenCell<U, Self>>>(
-        &'a mut self,
-        cells: impl FnOnce(Pin<&'a mut T>) -> I,
-    ) -> impl Iterator<Item = RefMut<'a, U, Self>> {
-        self.try_borrow_iter_mut(cells).map(Result::unwrap)
     }
 }
 

@@ -8,9 +8,11 @@ pub struct Graph {
     token: GraphToken,
 }
 
+pub type NodeId = usize;
+
 pub type GraphToken = Box<AllocatedToken>;
 
-pub type NodeId = usize;
+type NodeCell = TokenCell<Node, Box<AllocatedToken>>;
 
 #[derive(Debug, Default)]
 pub struct Node {
@@ -18,32 +20,28 @@ pub struct Node {
     edges: HashMap<NodeId, Arc<NodeCell>>,
 }
 
-type NodeCell = TokenCell<Node, Box<AllocatedToken>>;
-
 impl Graph {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn get_node(&self, id: NodeId) -> Option<&Node> {
-        Some(self.nodes.get(&id)?.borrow(&self.token).into_ref())
+        Some(self.nodes.get(&id)?.borrow(&self.token).inner)
     }
 
     pub fn insert_node(&mut self, id: NodeId) -> &mut Node {
         let entry = self.nodes.entry(id);
         let node = entry.or_insert_with(|| Node::new_cell(id, &self.token));
-        node.borrow_mut(&mut self.token).into_mut()
+        node.borrow_mut(&mut self.token).inner
     }
 
     pub fn remove_node(&mut self, id: NodeId) -> bool {
         let Some(node) = self.nodes.remove(&id) else {
             return false;
         };
-        for mut other in node
-            .borrow_mut(&mut self.token)
-            .reborrow_iter_mut(|node| node.edges.values().map(|other| other.as_ref()))
-        {
-            other.edges.remove(&id);
+        let node = node.borrow_mut(&mut self.token);
+        for other in node.inner.edges.values() {
+            other.borrow_mut(&mut *node.token).edges.remove(&id);
         }
         true
     }
