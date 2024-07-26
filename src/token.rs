@@ -1,4 +1,6 @@
 //! Implementations of [`Token`] used with [`TokenCell`].
+//!
+//! The recommended token implementation is [`BoxedToken`].
 
 use core::{
     fmt,
@@ -23,6 +25,9 @@ pub unsafe trait Token {
     fn is_unique(&mut self) -> bool;
 }
 
+/// Const token that can be used with [`TokenCell::new_const`].
+///
+/// Tokens generated with [`token!`] macro implement this trait.
 pub trait ConstToken: Token {
     const ID: Self::Id;
 }
@@ -35,30 +40,35 @@ pub struct PtrId<T: ?Sized>(*const T);
 
 impl<T: ?Sized> PtrId<T> {
     /// Wrap a pointer.
+    #[inline]
     pub fn new(ptr: *const T) -> Self {
         Self(ptr)
     }
 }
 
 impl<T: ?Sized> From<*const T> for PtrId<T> {
+    #[inline]
     fn from(value: *const T) -> Self {
         Self(value)
     }
 }
 
 impl<T: ?Sized> From<*mut T> for PtrId<T> {
+    #[inline]
     fn from(value: *mut T) -> Self {
         Self(value)
     }
 }
 
 impl<T: ?Sized> From<&T> for PtrId<T> {
+    #[inline]
     fn from(value: &T) -> Self {
         Self(value)
     }
 }
 
 impl<T: ?Sized> From<&mut T> for PtrId<T> {
+    #[inline]
     fn from(value: &mut T) -> Self {
         Self(value)
     }
@@ -77,12 +87,14 @@ impl<T: ?Sized> fmt::Debug for PtrId<T> {
 
 impl<T: ?Sized> Copy for PtrId<T> {}
 impl<T: ?Sized> Clone for PtrId<T> {
+    #[inline]
     fn clone(&self) -> Self {
         *self
     }
 }
 
 impl<T: ?Sized> PartialEq for PtrId<T> {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self.0, other.0)
     }
@@ -114,6 +126,7 @@ macro_rules! token {
         const _: () = {
             static INITIALIZED: ::core::sync::atomic::AtomicBool = ::core::sync::atomic::AtomicBool::new(false);
             impl $name {
+                #[inline]
                 $vis fn try_new() -> Result<Self, $crate::error::AlreadyInitialized> {
                     if INITIALIZED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
                         Err($crate::error::AlreadyInitialized)
@@ -122,12 +135,14 @@ macro_rules! token {
                     }
                 }
 
+                #[inline]
                 $vis fn new() -> Self {
                     Self::try_new().unwrap()
                 }
             }
 
             impl Drop for $name {
+                #[inline]
                 fn drop(&mut self) {
                     INITIALIZED.store(false, ::core::sync::atomic::Ordering::Relaxed);
                 }
@@ -137,8 +152,10 @@ macro_rules! token {
             unsafe impl $crate::token::Token for $name {
                 type Id = ();
 
+                #[inline]
                 fn id(&self) -> Self::Id {}
 
+                #[inline]
                 fn is_unique(&mut self) -> bool {
                     true
                 }
@@ -167,6 +184,7 @@ static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub struct DynamicToken(usize);
 
 impl DynamicToken {
+    #[inline]
     pub fn new() -> Self {
         let token = DYNAMIC_COUNTER.fetch_add(1, Ordering::Relaxed);
         if token > isize::MAX as usize {
@@ -196,6 +214,7 @@ impl DynamicToken {
 }
 
 impl Default for DynamicToken {
+    #[inline]
     fn default() -> Self {
         Self::new()
     }
@@ -205,10 +224,12 @@ impl Default for DynamicToken {
 unsafe impl Token for DynamicToken {
     type Id = usize;
 
+    #[inline]
     fn id(&self) -> Self::Id {
         self.0
     }
 
+    #[inline]
     fn is_unique(&mut self) -> bool {
         true
     }
@@ -223,11 +244,13 @@ unsafe impl Token for DynamicToken {
 pub struct RefMutToken<T: ?Sized>(T);
 
 impl<T: ?Sized> RefMutToken<T> {
+    #[inline]
     pub fn from_ref(t: &T) -> &Self {
         // SAFETY: `RefMutToken` is `repr(transparent)`
         unsafe { &*(t as *const T as *const Self) }
     }
 
+    #[inline]
     pub fn from_mut(t: &mut T) -> &mut Self {
         // SAFETY: `RefMutToken` is `repr(transparent)`
         unsafe { &mut *(t as *mut T as *mut Self) }
@@ -237,24 +260,28 @@ impl<T: ?Sized> RefMutToken<T> {
 impl<T: ?Sized> Deref for RefMutToken<T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl<T: ?Sized> DerefMut for RefMutToken<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
 impl<'a, T: ?Sized> From<&'a T> for &'a RefMutToken<T> {
+    #[inline]
     fn from(value: &'a T) -> Self {
         RefMutToken::from_ref(value)
     }
 }
 
 impl<'a, T: ?Sized> From<&'a mut T> for &'a mut RefMutToken<T> {
+    #[inline]
     fn from(value: &'a mut T) -> Self {
         RefMutToken::from_mut(value)
     }
@@ -264,10 +291,12 @@ impl<'a, T: ?Sized> From<&'a mut T> for &'a mut RefMutToken<T> {
 unsafe impl<T: ?Sized> Token for RefMutToken<T> {
     type Id = PtrId<T>;
 
+    #[inline]
     fn id(&self) -> Self::Id {
         (&self.0).into()
     }
 
+    #[inline]
     fn is_unique(&mut self) -> bool {
         true
     }
@@ -278,11 +307,13 @@ unsafe impl<T: ?Sized> Token for RefMutToken<T> {
 pub struct PinToken<T: ?Sized>(T);
 
 impl<T: ?Sized> PinToken<T> {
+    #[inline]
     pub fn from_ref(t: Pin<&T>) -> &Self {
         // SAFETY: `PinToken` is `repr(transparent)`
         unsafe { &*(t.get_ref() as *const T as *const Self) }
     }
 
+    #[inline]
     pub fn from_mut(t: Pin<&mut T>) -> &mut Self {
         // SAFETY: mutable ref is never accessed and `RefMutToken` is `repr(transparent)`
         unsafe { &mut *(t.get_unchecked_mut() as *mut T as *mut Self) }
@@ -292,24 +323,28 @@ impl<T: ?Sized> PinToken<T> {
 impl<T: ?Sized> Deref for PinToken<T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
 impl<T: ?Sized> DerefMut for PinToken<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
 impl<'a, T: ?Sized> From<Pin<&'a T>> for &'a PinToken<T> {
+    #[inline]
     fn from(value: Pin<&'a T>) -> Self {
         PinToken::from_ref(value)
     }
 }
 
 impl<'a, T: ?Sized> From<Pin<&'a mut T>> for &'a mut PinToken<T> {
+    #[inline]
     fn from(value: Pin<&'a mut T>) -> Self {
         PinToken::from_mut(value)
     }
@@ -319,10 +354,12 @@ impl<'a, T: ?Sized> From<Pin<&'a mut T>> for &'a mut PinToken<T> {
 unsafe impl<T: ?Sized> Token for PinToken<T> {
     type Id = PtrId<T>;
 
+    #[inline]
     fn id(&self) -> Self::Id {
         (&self.0).into()
     }
 
+    #[inline]
     fn is_unique(&mut self) -> bool {
         true
     }
@@ -336,6 +373,26 @@ unsafe impl<T: ?Sized> Token for PinToken<T> {
 #[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct AllocatedToken(u8);
+
+/// A wrapper for `Box<AllocatedToken>`.
+///
+/// This is the recommended token implementation.
+#[derive(Debug, Default)]
+pub struct BoxedToken(Box<AllocatedToken>);
+
+unsafe impl Token for BoxedToken {
+    type Id = <Box<AllocatedToken> as Token>::Id;
+
+    #[inline]
+    fn id(&self) -> Self::Id {
+        self.0.id()
+    }
+
+    #[inline]
+    fn is_unique(&mut self) -> bool {
+        self.0.is_unique()
+    }
+}
 
 #[cfg(feature = "alloc")]
 const _: () = {
@@ -354,6 +411,7 @@ const _: () = {
     unsafe impl<T> Token for Box<T> {
         type Id = PtrId<T>;
 
+        #[inline]
         fn id(&self) -> Self::Id {
             {
                 T::ASSERT_SIZE_IS_NOT_ZERO
@@ -361,6 +419,7 @@ const _: () = {
             self.as_ref().into()
         }
 
+        #[inline]
         fn is_unique(&mut self) -> bool {
             {
                 T::ASSERT_SIZE_IS_NOT_ZERO
@@ -375,6 +434,7 @@ const _: () = {
     unsafe impl<T> Token for Rc<T> {
         type Id = PtrId<T>;
 
+        #[inline]
         fn id(&self) -> Self::Id {
             {
                 T::ASSERT_SIZE_IS_NOT_ZERO
@@ -382,6 +442,7 @@ const _: () = {
             self.as_ref().into()
         }
 
+        #[inline]
         fn is_unique(&mut self) -> bool {
             {
                 T::ASSERT_SIZE_IS_NOT_ZERO
@@ -396,6 +457,7 @@ const _: () = {
     unsafe impl<T> Token for Arc<T> {
         type Id = PtrId<T>;
 
+        #[inline]
         fn id(&self) -> Self::Id {
             {
                 T::ASSERT_SIZE_IS_NOT_ZERO
@@ -403,6 +465,7 @@ const _: () = {
             self.as_ref().into()
         }
 
+        #[inline]
         fn is_unique(&mut self) -> bool {
             {
                 T::ASSERT_SIZE_IS_NOT_ZERO

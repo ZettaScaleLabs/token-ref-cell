@@ -1,18 +1,16 @@
 use std::{collections::HashMap, mem, sync::Arc};
 
-use token_cell2::{token::AllocatedToken, TokenCell};
+use token_cell2::{token::BoxedToken, TokenCell};
 
 #[derive(Debug, Default)]
 pub struct Graph {
     nodes: HashMap<NodeId, Arc<NodeCell>>,
-    token: GraphToken,
+    token: BoxedToken,
 }
 
 pub type NodeId = usize;
 
-pub type GraphToken = Box<AllocatedToken>;
-
-type NodeCell = TokenCell<Node, Box<AllocatedToken>>;
+type NodeCell = TokenCell<Node, BoxedToken>;
 
 #[derive(Debug, Default)]
 pub struct Node {
@@ -89,7 +87,7 @@ impl Graph {
 }
 
 impl Node {
-    fn new_cell(id: NodeId, token: &GraphToken) -> Arc<NodeCell> {
+    fn new_cell(id: NodeId, token: &BoxedToken) -> Arc<NodeCell> {
         let edges = HashMap::new();
         Arc::new(NodeCell::new(Node { id, edges }, token))
     }
