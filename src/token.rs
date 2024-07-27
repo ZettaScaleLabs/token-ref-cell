@@ -9,6 +9,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicUsize, Ordering},
 };
+use std::num::NonZeroUsize;
 
 /// Token type to be used with [`TokenCell`](crate::TokenCell).
 ///
@@ -18,7 +19,7 @@ use core::{
 /// type with `Token::id` returning the same id as the current "unique" instance.
 pub unsafe trait Token {
     /// Id of the token.
-    type Id: Clone + Eq;
+    type Id: Copy + Eq;
     /// Return the token id.
     fn id(&self) -> Self::Id;
     /// Returns true if the token is "unique", see [safety](Self#safety)
@@ -168,7 +169,7 @@ macro_rules! token {
     };
 }
 
-static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 /// Dynamic token, equivalent to an `usize` in memory.
 ///
@@ -181,7 +182,7 @@ static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// You should use smart-pointer based token instead, as they use
 /// non-trivial unicity algorithm named "allocator".
 #[derive(Debug, Eq, PartialEq)]
-pub struct DynamicToken(usize);
+pub struct DynamicToken(NonZeroUsize);
 
 impl DynamicToken {
     #[inline]
@@ -209,7 +210,7 @@ impl DynamicToken {
             }
             abort();
         }
-        Self(token)
+        Self(NonZeroUsize::new(token).unwrap())
     }
 }
 
@@ -222,7 +223,7 @@ impl Default for DynamicToken {
 
 // SAFETY: Each `DynamicToken` has a different inner token and cannot be cloned
 unsafe impl Token for DynamicToken {
-    type Id = usize;
+    type Id = NonZeroUsize;
 
     #[inline]
     fn id(&self) -> Self::Id {
@@ -379,6 +380,12 @@ pub struct AllocatedToken(u8);
 /// This is the recommended token implementation.
 #[derive(Debug, Default)]
 pub struct BoxedToken(Box<AllocatedToken>);
+
+impl BoxedToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 unsafe impl Token for BoxedToken {
     type Id = <Box<AllocatedToken> as Token>::Id;

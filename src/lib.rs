@@ -27,6 +27,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::{
+    borrow::Borrow,
     cell::UnsafeCell,
     fmt,
     ops::{Deref, DerefMut},
@@ -88,13 +89,11 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     }
 
     #[inline]
-    pub fn try_borrow<'a>(
-        &'a self,
-        token: impl Into<&'a Tk>,
-    ) -> Result<Ref<'a, T, Tk>, BorrowError> {
-        let token = token.into();
+    pub fn try_borrow<'a>(&'a self, token: &'a Tk) -> Result<Ref<'a, T, Tk>, BorrowError> {
         if token.id() == self.token_id {
-            // TODO safety
+            // SAFETY: `Token` trait guarantees that there can be only one token
+            // able to borrow the cell. Having a shared reference to this token
+            // ensures that the cell cannot be borrowed mutably.
             let inner = unsafe { &*self.cell.get() };
             Ok(Ref { inner, token })
         } else {
@@ -103,18 +102,19 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     }
 
     #[inline]
-    pub fn borrow<'a>(&'a self, token: impl Into<&'a Tk>) -> Ref<'a, T, Tk> {
+    pub fn borrow<'a>(&'a self, token: &'a Tk) -> Ref<'a, T, Tk> {
         self.try_borrow(token).unwrap()
     }
 
     #[inline]
     pub fn try_borrow_mut<'a>(
         &'a self,
-        token: impl Into<&'a mut Tk>,
+        token: &'a mut Tk,
     ) -> Result<RefMut<'a, T, Tk>, BorrowMutError> {
-        let token = token.into();
         if token.is_unique() && token.id() == self.token_id {
-            // TODO safety
+            // SAFETY: `Token` trait guarantees that there can be only one token
+            // able to borrow the cell. Having an exclusive reference to this token
+            // ensures that the cell is exclusively borrowed.
             let inner = unsafe { &mut *self.cell.get() };
             Ok(RefMut { inner, token })
         } else {
@@ -123,7 +123,7 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     }
 
     #[inline]
-    pub fn borrow_mut<'a>(&'a self, token: impl Into<&'a mut Tk>) -> RefMut<'a, T, Tk> {
+    pub fn borrow_mut<'a>(&'a self, token: &'a mut Tk) -> RefMut<'a, T, Tk> {
         self.try_borrow_mut(token).unwrap()
     }
 }
@@ -152,12 +152,83 @@ where
 ///
 /// The token can be reused for further borrowing.
 #[derive(Debug)]
-pub struct Ref<'b, T: ?Sized, Tk: ?Sized> {
-    pub inner: &'b T,
-    pub token: &'b Tk,
+pub struct Ref<'b, T: ?Sized, Tk: Token + ?Sized> {
+    token: &'b Tk,
+    inner: &'b T,
 }
 
-impl<T: ?Sized, Tk: ?Sized> Deref for Ref<'_, T, Tk> {
+impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
+    pub fn clone(this: &Self) -> Self {
+        Self {
+            token: this.token,
+            inner: this.inner,
+        }
+    }
+
+    #[inline]
+    pub fn try_reborrow<'a, U, R>(
+        &'a self,
+        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
+    ) -> R {
+        f(cell(self.inner).try_borrow(self.token))
+    }
+
+    #[inline]
+    pub fn reborrow<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        f: impl FnOnce(Ref<U, Tk>) -> R,
+    ) -> R {
+        self.try_reborrow(cell, |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_opt<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
+    ) -> Option<R> {
+        Some(f(cell(self.inner)?.try_borrow(self.token)))
+    }
+
+    #[inline]
+    pub fn reborrow_opt<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        f: impl FnOnce(Ref<U, Tk>) -> R,
+    ) -> Option<R> {
+        self.try_reborrow_opt(cell, |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_iter<'a, U: 'a, I, R>(
+        &'a self,
+        cell: impl FnOnce(&'a T) -> I,
+        mut f: impl FnMut(Result<Ref<U, Tk>, BorrowError>) -> R + 'a,
+    ) -> impl Iterator<Item = R> + 'a
+    where
+        I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
+    {
+        cell(self.inner)
+            .into_iter()
+            .map(move |cell| f(cell.try_borrow(self.token)))
+    }
+
+    #[inline]
+    pub fn reborrow_iter<'a, U: 'a, I: IntoIterator + 'a, R>(
+        &'a self,
+        cell: impl FnOnce(&T) -> I,
+        mut f: impl FnMut(Ref<U, Tk>) -> R + 'a,
+    ) -> impl Iterator<Item = R> + 'a
+    where
+        I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
+    {
+        self.try_reborrow_iter(cell, move |res| f(res.unwrap()))
+    }
+}
+
+impl<T: ?Sized, Tk: Token + ?Sized> Deref for Ref<'_, T, Tk> {
     type Target = T;
 
     #[inline]
@@ -166,7 +237,7 @@ impl<T: ?Sized, Tk: ?Sized> Deref for Ref<'_, T, Tk> {
     }
 }
 
-impl<T: ?Sized + fmt::Display, Tk: ?Sized> fmt::Display for Ref<'_, T, Tk> {
+impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, Tk> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", &**self)
     }
@@ -176,12 +247,139 @@ impl<T: ?Sized + fmt::Display, Tk: ?Sized> fmt::Display for Ref<'_, T, Tk> {
 ///
 /// The token can be reused for further borrowing.
 #[derive(Debug)]
-pub struct RefMut<'b, T: ?Sized, Tk: ?Sized> {
-    pub inner: &'b mut T,
-    pub token: &'b mut Tk,
+pub struct RefMut<'b, T: ?Sized, Tk: Token + ?Sized> {
+    token: &'b mut Tk,
+    inner: &'b mut T,
 }
 
-impl<T: ?Sized, Tk: ?Sized> Deref for RefMut<'_, T, Tk> {
+impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
+    #[inline]
+    pub fn try_reborrow<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
+    ) -> R {
+        f(cell(self.inner).try_borrow(self.token))
+    }
+
+    #[inline]
+    pub fn reborrow<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        f: impl FnOnce(Ref<U, Tk>) -> R,
+    ) -> R {
+        self.try_reborrow(cell, |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_opt<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
+    ) -> Option<R> {
+        Some(f(cell(self.inner)?.try_borrow(self.token)))
+    }
+
+    #[inline]
+    pub fn reborrow_opt<U, R>(
+        &self,
+        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        f: impl FnOnce(Ref<U, Tk>) -> R,
+    ) -> Option<R> {
+        self.try_reborrow_opt(cell, |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_iter<'a, U: 'a, I, R>(
+        &'a self,
+        cell: impl FnOnce(&'a T) -> I,
+        mut f: impl FnMut(Result<Ref<U, Tk>, BorrowError>) -> R + 'a,
+    ) -> impl Iterator<Item = R> + 'a
+    where
+        I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
+    {
+        cell(self.inner)
+            .into_iter()
+            .map(move |cell| f(cell.try_borrow(self.token)))
+    }
+
+    #[inline]
+    pub fn reborrow_iter<'a, U: 'a, I: IntoIterator + 'a, R>(
+        &'a self,
+        cell: impl FnOnce(&'a T) -> I,
+        mut f: impl FnMut(Ref<U, Tk>) -> R + 'a,
+    ) -> impl Iterator<Item = R> + 'a
+    where
+        I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
+    {
+        self.try_reborrow_iter(cell, move |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_mut<U, R>(
+        &mut self,
+        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        f: impl FnOnce(Result<RefMut<U, Tk>, BorrowMutError>) -> R,
+    ) -> R {
+        f(cell(self.inner).try_borrow_mut(self.token))
+    }
+
+    #[inline]
+    pub fn reborrow_mut<U, R>(
+        &mut self,
+        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        f: impl FnOnce(RefMut<U, Tk>) -> R,
+    ) -> R {
+        self.try_reborrow_mut(cell, |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_opt_mut<U, R>(
+        &mut self,
+        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        f: impl FnOnce(Result<RefMut<U, Tk>, BorrowMutError>) -> R,
+    ) -> Option<R> {
+        Some(f(cell(self.inner)?.try_borrow_mut(self.token)))
+    }
+
+    #[inline]
+    pub fn reborrow_opt_mut<U, R>(
+        &mut self,
+        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        f: impl FnOnce(RefMut<U, Tk>) -> R,
+    ) -> Option<R> {
+        self.try_reborrow_opt_mut(cell, |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn try_reborrow_iter_mut<'a, U: 'a, I, R>(
+        &'a mut self,
+        cell: impl FnOnce(&'a T) -> I,
+        mut f: impl FnMut(Result<RefMut<U, Tk>, BorrowMutError>) -> R + 'a,
+    ) -> impl Iterator<Item = R> + 'a
+    where
+        I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
+    {
+        let token = &mut *self.token;
+        cell(self.inner)
+            .into_iter()
+            .map(move |cell| f(cell.try_borrow_mut(token)))
+    }
+
+    #[inline]
+    pub fn reborrow_iter_mut<'a, U: 'a, I, R>(
+        &'a mut self,
+        cell: impl FnOnce(&'a T) -> I,
+        mut f: impl FnMut(RefMut<U, Tk>) -> R + 'a,
+    ) -> impl Iterator<Item = R> + 'a
+    where
+        I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
+    {
+        self.try_reborrow_iter_mut(cell, move |res| f(res.unwrap()))
+    }
+}
+
+impl<T: ?Sized, Tk: Token + ?Sized> Deref for RefMut<'_, T, Tk> {
     type Target = T;
 
     #[inline]
@@ -190,14 +388,14 @@ impl<T: ?Sized, Tk: ?Sized> Deref for RefMut<'_, T, Tk> {
     }
 }
 
-impl<T: ?Sized, Tk: ?Sized> DerefMut for RefMut<'_, T, Tk> {
+impl<T: ?Sized, Tk: Token + ?Sized> DerefMut for RefMut<'_, T, Tk> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner
     }
 }
 
-impl<T: ?Sized + fmt::Display, Tk: ?Sized> fmt::Display for RefMut<'_, T, Tk> {
+impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for RefMut<'_, T, Tk> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", &**self)
     }

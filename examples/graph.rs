@@ -1,6 +1,11 @@
-use std::{collections::HashMap, mem, sync::Arc};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt::Debug,
+    mem,
+    sync::Arc,
+};
 
-use token_cell2::{token::BoxedToken, TokenCell};
+use token_cell2::{token::BoxedToken, Ref, TokenCell};
 
 #[derive(Debug, Default)]
 pub struct Graph {
@@ -18,29 +23,50 @@ pub struct Node {
     edges: HashMap<NodeId, Arc<NodeCell>>,
 }
 
+pub struct NodeRef<'a>(Ref<'a, Node, BoxedToken>);
+
+impl<'a> Clone for NodeRef<'a> {
+    fn clone(&self) -> Self {
+        Self(Ref::clone(&self.0))
+    }
+}
+
+impl<'a> NodeRef<'a> {
+    pub fn id(&self) -> NodeId {
+        self.0.id
+    }
+
+    pub fn edges(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.0.edges.keys().copied()
+    }
+}
+
 impl Graph {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn get_node(&self, id: NodeId) -> Option<&Node> {
-        Some(self.nodes.get(&id)?.borrow(&self.token).inner)
+    pub fn get_node(&self, id: NodeId) -> Option<NodeRef> {
+        Some(NodeRef(self.nodes.get(&id)?.borrow(&self.token)))
     }
 
-    pub fn insert_node(&mut self, id: NodeId) -> &mut Node {
+    pub fn insert_node(&mut self, id: NodeId) -> bool {
         let entry = self.nodes.entry(id);
-        let node = entry.or_insert_with(|| Node::new_cell(id, &self.token));
-        node.borrow_mut(&mut self.token).inner
+        let inserted = matches!(entry, Entry::Vacant(_));
+        entry.or_insert_with(|| Node::new_cell(id, &self.token));
+        inserted
     }
 
     pub fn remove_node(&mut self, id: NodeId) -> bool {
         let Some(node) = self.nodes.remove(&id) else {
             return false;
         };
-        let node = node.borrow_mut(&mut self.token);
-        for other in node.inner.edges.values() {
-            other.borrow_mut(&mut *node.token).edges.remove(&id);
-        }
+        node.borrow_mut(&mut self.token)
+            .reborrow_iter_mut(
+                |node| node.edges.values().map(AsRef::as_ref),
+                |mut other| other.edges.remove(&id),
+            )
+            .for_each(|_| ());
         true
     }
 
@@ -90,14 +116,6 @@ impl Node {
     fn new_cell(id: NodeId, token: &BoxedToken) -> Arc<NodeCell> {
         let edges = HashMap::new();
         Arc::new(NodeCell::new(Node { id, edges }, token))
-    }
-
-    pub fn id(&self) -> NodeId {
-        self.id
-    }
-
-    pub fn edges(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.edges.keys().copied()
     }
 }
 
