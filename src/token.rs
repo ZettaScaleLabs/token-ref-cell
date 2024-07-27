@@ -28,7 +28,7 @@ pub unsafe trait Token {
 
 /// Const token that can be used with [`TokenCell::new_const`].
 ///
-/// Tokens generated with [`token!`] macro implement this trait.
+/// Tokens generated with [`singleton_token!`] macro implement this trait.
 pub trait ConstToken: Token {
     const ID: Self::Id;
 }
@@ -114,12 +114,12 @@ impl<T: ?Sized> Eq for PtrId<T> {}
 /// zero-cost abstraction, the only (negligible) cost is an atomic swap
 /// at instantiation.
 #[macro_export]
-macro_rules! token {
+macro_rules! singleton_token {
     ($name:ident) => {
-        $crate::token!(pub(self) struct $name);
+        $crate::singleton_token!(pub(self) struct $name);
     };
     ($(#[$($attr:meta)*])* struct $name:ident;) => {
-        $crate::token!($(#[$($attr)*])* pub(self) struct $name;);
+        $crate::singleton_token!($(#[$($attr)*])* pub(self) struct $name;);
     };
     ($(#[$($attr:meta)*])* $vis:vis struct $name:ident;) => {
         $(#[$($attr)*])*
