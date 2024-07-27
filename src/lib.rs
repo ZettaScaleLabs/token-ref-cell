@@ -27,11 +27,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::{
-    borrow::Borrow,
     cell::UnsafeCell,
     fmt,
     ops::{Deref, DerefMut},
 };
+use std::marker::PhantomData;
 
 use crate::{
     error::{BorrowError, BorrowMutError},
@@ -89,16 +89,24 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     }
 
     #[inline]
-    pub fn try_borrow<'a>(&'a self, token: &'a Tk) -> Result<Ref<'a, T, Tk>, BorrowError> {
-        if token.id() == self.token_id {
-            // SAFETY: `Token` trait guarantees that there can be only one token
-            // able to borrow the cell. Having a shared reference to this token
-            // ensures that the cell cannot be borrowed mutably.
-            let inner = unsafe { &*self.cell.get() };
-            Ok(Ref { inner, token })
+    pub(crate) fn get_ref(&self, token_id: Tk::Id) -> Result<Ref<T, Tk>, BorrowError> {
+        if token_id == self.token_id {
+            Ok(Ref {
+                token_id,
+                // SAFETY: `Token` trait guarantees that there can be only one token
+                // able to borrow the cell. Having a shared reference to this token
+                // ensures that the cell cannot be borrowed mutably.
+                inner: unsafe { &*self.cell.get() },
+                _phantom: PhantomData,
+            })
         } else {
             Err(BorrowError)
         }
+    }
+
+    #[inline]
+    pub fn try_borrow<'a>(&'a self, token: &'a Tk) -> Result<Ref<'a, T, Tk>, BorrowError> {
+        self.get_ref(token.id())
     }
 
     #[inline]
@@ -106,20 +114,35 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
         self.try_borrow(token).unwrap()
     }
 
+    /// # Safety
+    ///
+    /// Token id must be retrieved from a unique token.
+    #[inline]
+    pub(crate) unsafe fn get_mut(&self, token_id: Tk::Id) -> Result<RefMut<T, Tk>, BorrowMutError> {
+        if token_id == self.token_id {
+            Ok(RefMut {
+                token_id,
+                // SAFETY: `Token` trait guarantees that there can be only one token
+                // able to borrow the cell. Having an exclusive reference to this token
+                // ensures that the cell is exclusively borrowed.
+                inner: unsafe { &mut *self.cell.get() },
+                _phantom: PhantomData,
+            })
+        } else {
+            Err(BorrowMutError)
+        }
+    }
+
     #[inline]
     pub fn try_borrow_mut<'a>(
         &'a self,
         token: &'a mut Tk,
     ) -> Result<RefMut<'a, T, Tk>, BorrowMutError> {
-        if token.is_unique() && token.id() == self.token_id {
-            // SAFETY: `Token` trait guarantees that there can be only one token
-            // able to borrow the cell. Having an exclusive reference to this token
-            // ensures that the cell is exclusively borrowed.
-            let inner = unsafe { &mut *self.cell.get() };
-            Ok(RefMut { inner, token })
-        } else {
-            Err(BorrowMutError)
+        if !token.is_unique() {
+            return Err(BorrowMutError);
         }
+        // SAFETY: uniqueness is checked above
+        unsafe { self.get_mut(token.id()) }
     }
 
     #[inline]
@@ -153,25 +176,28 @@ where
 /// The token can be reused for further borrowing.
 #[derive(Debug)]
 pub struct Ref<'b, T: ?Sized, Tk: Token + ?Sized> {
-    token: &'b Tk,
+    token_id: Tk::Id,
     inner: &'b T,
+    _phantom: PhantomData<&'b Tk>,
 }
 
 impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
+    #[allow(clippy::should_implement_trait)]
     pub fn clone(this: &Self) -> Self {
         Self {
-            token: this.token,
+            token_id: this.token_id.clone(),
             inner: this.inner,
+            _phantom: PhantomData,
         }
     }
 
     #[inline]
-    pub fn try_reborrow<'a, U, R>(
-        &'a self,
+    pub fn try_reborrow<U, R>(
+        &self,
         cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
         f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
     ) -> R {
-        f(cell(self.inner).try_borrow(self.token))
+        f(cell(self.inner).get_ref(self.token_id.clone()))
     }
 
     #[inline]
@@ -189,7 +215,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
         cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
         f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
     ) -> Option<R> {
-        Some(f(cell(self.inner)?.try_borrow(self.token)))
+        Some(f(cell(self.inner)?.get_ref(self.token_id.clone())))
     }
 
     #[inline]
@@ -212,7 +238,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
     {
         cell(self.inner)
             .into_iter()
-            .map(move |cell| f(cell.try_borrow(self.token)))
+            .map(move |cell| f(cell.get_ref(self.token_id.clone())))
     }
 
     #[inline]
@@ -248,8 +274,9 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, T
 /// The token can be reused for further borrowing.
 #[derive(Debug)]
 pub struct RefMut<'b, T: ?Sized, Tk: Token + ?Sized> {
-    token: &'b mut Tk,
+    token_id: Tk::Id,
     inner: &'b mut T,
+    _phantom: PhantomData<&'b mut Tk>,
 }
 
 impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
@@ -259,7 +286,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
         f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
     ) -> R {
-        f(cell(self.inner).try_borrow(self.token))
+        f(cell(self.inner).get_ref(self.token_id.clone()))
     }
 
     #[inline]
@@ -277,7 +304,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
         f: impl FnOnce(Result<Ref<U, Tk>, BorrowError>) -> R,
     ) -> Option<R> {
-        Some(f(cell(self.inner)?.try_borrow(self.token)))
+        Some(f(cell(self.inner)?.get_ref(self.token_id.clone())))
     }
 
     #[inline]
@@ -300,7 +327,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     {
         cell(self.inner)
             .into_iter()
-            .map(move |cell| f(cell.try_borrow(self.token)))
+            .map(move |cell| f(cell.get_ref(self.token_id.clone())))
     }
 
     #[inline]
@@ -321,7 +348,8 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
         f: impl FnOnce(Result<RefMut<U, Tk>, BorrowMutError>) -> R,
     ) -> R {
-        f(cell(self.inner).try_borrow_mut(self.token))
+        // SAFETY: token uniqueness has been checked to build the `RefMut`
+        f(unsafe { cell(self.inner).get_mut(self.token_id.clone()) })
     }
 
     #[inline]
@@ -339,7 +367,10 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
         f: impl FnOnce(Result<RefMut<U, Tk>, BorrowMutError>) -> R,
     ) -> Option<R> {
-        Some(f(cell(self.inner)?.try_borrow_mut(self.token)))
+        // SAFETY: token uniqueness has been checked to build the `RefMut`
+        Some(f(unsafe {
+            cell(self.inner)?.get_mut(self.token_id.clone())
+        }))
     }
 
     #[inline]
@@ -360,10 +391,11 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     where
         I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
     {
-        let token = &mut *self.token;
+        let token_id = self.token_id.clone();
         cell(self.inner)
             .into_iter()
-            .map(move |cell| f(cell.try_borrow_mut(token)))
+            // SAFETY: token uniqueness has been checked to build the `RefMut`
+            .map(move |cell| f(unsafe { cell.get_mut(token_id.clone()) }))
     }
 
     #[inline]

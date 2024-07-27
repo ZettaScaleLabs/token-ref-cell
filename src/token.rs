@@ -19,7 +19,7 @@ use std::num::NonZeroUsize;
 /// type with `Token::id` returning the same id as the current "unique" instance.
 pub unsafe trait Token {
     /// Id of the token.
-    type Id: Copy + Eq;
+    type Id: Clone + Eq;
     /// Return the token id.
     fn id(&self) -> Self::Id;
     /// Returns true if the token is "unique", see [safety](Self#safety)
