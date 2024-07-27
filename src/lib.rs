@@ -47,6 +47,12 @@ pub struct TokenCell<T: ?Sized, Tk: Token + ?Sized> {
     cell: UnsafeCell<T>,
 }
 
+impl<T: ?Sized, Tk: Token + ?Sized> AsRef<TokenCell<T, Tk>> for &TokenCell<T, Tk> {
+    fn as_ref(&self) -> &TokenCell<T, Tk> {
+        self
+    }
+}
+
 // SAFETY: Inner `UnsafeCell` access is synchronized using `Token` uniqueness guarantee.
 unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenCell<T, Tk> where Tk::Id: Sync {}
 
@@ -345,7 +351,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     #[inline]
     pub fn try_reborrow_mut<U, R>(
         &mut self,
-        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut T) -> &TokenCell<U, Tk>,
         f: impl FnOnce(Result<RefMut<U, Tk>, BorrowMutError>) -> R,
     ) -> R {
         // SAFETY: token uniqueness has been checked to build the `RefMut`
@@ -355,7 +361,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     #[inline]
     pub fn reborrow_mut<U, R>(
         &mut self,
-        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut T) -> &TokenCell<U, Tk>,
         f: impl FnOnce(RefMut<U, Tk>) -> R,
     ) -> R {
         self.try_reborrow_mut(cell, |res| f(res.unwrap()))
@@ -364,7 +370,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     #[inline]
     pub fn try_reborrow_opt_mut<U, R>(
         &mut self,
-        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut T) -> Option<&TokenCell<U, Tk>>,
         f: impl FnOnce(Result<RefMut<U, Tk>, BorrowMutError>) -> R,
     ) -> Option<R> {
         // SAFETY: token uniqueness has been checked to build the `RefMut`
@@ -376,7 +382,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     #[inline]
     pub fn reborrow_opt_mut<U, R>(
         &mut self,
-        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut T) -> Option<&TokenCell<U, Tk>>,
         f: impl FnOnce(RefMut<U, Tk>) -> R,
     ) -> Option<R> {
         self.try_reborrow_opt_mut(cell, |res| f(res.unwrap()))
@@ -385,29 +391,46 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     #[inline]
     pub fn try_reborrow_iter_mut<'a, U: 'a, I, R>(
         &'a mut self,
-        cell: impl FnOnce(&'a T) -> I,
+        cells: impl FnOnce(&'a mut T) -> I,
         mut f: impl FnMut(Result<RefMut<U, Tk>, BorrowMutError>) -> R + 'a,
     ) -> impl Iterator<Item = R> + 'a
     where
         I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
     {
         let token_id = self.token_id.clone();
-        cell(self.inner)
+        cells(self.inner)
             .into_iter()
             // SAFETY: token uniqueness has been checked to build the `RefMut`
-            .map(move |cell| f(unsafe { cell.get_mut(token_id.clone()) }))
+            .map(move |cell| f(unsafe { cell.as_ref().get_mut(token_id.clone()) }))
     }
 
     #[inline]
     pub fn reborrow_iter_mut<'a, U: 'a, I, R>(
         &'a mut self,
-        cell: impl FnOnce(&'a T) -> I,
+        cells: impl FnOnce(&'a mut T) -> I,
         mut f: impl FnMut(RefMut<U, Tk>) -> R + 'a,
     ) -> impl Iterator<Item = R> + 'a
     where
         I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
     {
-        self.try_reborrow_iter_mut(cell, move |res| f(res.unwrap()))
+        self.try_reborrow_iter_mut(cells, move |res| f(res.unwrap()))
+    }
+
+    #[inline]
+    pub fn reborrow_iter_mut2<U, I, R>(
+        &mut self,
+        cells: impl FnOnce(&mut T) -> I,
+        mut f: impl FnMut(RefMut<U, Tk>) -> R,
+    ) -> impl Iterator<Item = R>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<TokenCell<U, Tk>>,
+    {
+        let token_id = self.token_id.clone();
+        cells(self.inner)
+            .into_iter()
+            // SAFETY: token uniqueness has been checked to build the `RefMut`
+            .map(move |cell| f(unsafe { cell.as_ref().get_mut(token_id.clone()).unwrap() }))
     }
 }
 

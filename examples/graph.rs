@@ -61,12 +61,10 @@ impl Graph {
         let Some(node) = self.nodes.remove(&id) else {
             return false;
         };
-        node.borrow_mut(&mut self.token)
-            .reborrow_iter_mut(
-                |node| node.edges.values().map(AsRef::as_ref),
-                |mut other| other.edges.remove(&id),
-            )
-            .for_each(|_| ());
+        for _ in node.borrow_mut(&mut self.token).reborrow_iter_mut(
+            |node| node.edges.values().map(AsRef::as_ref),
+            |mut other| other.edges.remove(&id),
+        ) {}
         true
     }
 
