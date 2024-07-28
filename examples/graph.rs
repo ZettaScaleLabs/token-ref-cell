@@ -2,28 +2,26 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt::Debug,
     mem,
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
-use token_cell2::{token::BoxedToken, Ref, TokenCell};
+use token_cell2::{BoxToken, Ref, TokenCell};
 
 #[derive(Debug, Default)]
 pub struct Graph {
-    nodes: HashMap<NodeId, Arc<NodeCell>>,
-    token: BoxedToken,
+    nodes: HashMap<NodeId, Arc<TokenCell<Node>>>,
+    token: BoxToken,
 }
 
 pub type NodeId = usize;
 
-type NodeCell = TokenCell<Node, BoxedToken>;
-
 #[derive(Debug, Default)]
 pub struct Node {
     id: NodeId,
-    edges: HashMap<NodeId, Arc<NodeCell>>,
+    edges: HashMap<NodeId, Arc<TokenCell<Node>>>,
 }
 
-pub struct NodeRef<'a>(Ref<'a, Node, BoxedToken>);
+pub struct NodeRef<'a>(Ref<'a, Node, BoxToken>);
 
 impl<'a> Clone for NodeRef<'a> {
     fn clone(&self) -> Self {
@@ -111,9 +109,9 @@ impl Graph {
 }
 
 impl Node {
-    fn new_cell(id: NodeId, token: &BoxedToken) -> Arc<NodeCell> {
+    fn new_cell(id: NodeId, token: &BoxToken) -> Arc<TokenCell<Node>> {
         let edges = HashMap::new();
-        Arc::new(NodeCell::new(Node { id, edges }, token))
+        Arc::new(TokenCell::new(Node { id, edges }, token))
     }
 }
 
@@ -124,15 +122,20 @@ impl Drop for Graph {
 }
 
 fn main() {
-    let mut graph = Graph::new();
-    graph.insert_edge(0, 1);
-    graph.insert_edge(1, 2);
-    graph.insert_edge(2, 0);
-    graph.remove_node(1);
-    let graph = Arc::new(graph);
-    let node = graph.get_node(0).unwrap();
-    assert_eq!(node.id(), 0);
-    let mut edges = node.edges();
-    assert_eq!(edges.next(), Some(2));
-    assert_eq!(edges.next(), None);
+    let graph = Arc::new(RwLock::new(Graph::new()));
+    {
+        let mut graph_mut = graph.write().unwrap();
+        graph_mut.insert_edge(0, 1);
+        graph_mut.insert_edge(1, 2);
+        graph_mut.insert_edge(2, 0);
+        graph_mut.remove_node(1);
+    }
+    {
+        let graph_ref = graph.read().unwrap();
+        let node = graph_ref.get_node(0).unwrap();
+        assert_eq!(node.id(), 0);
+        let mut edges = node.edges();
+        assert_eq!(edges.next(), Some(2));
+        assert_eq!(edges.next(), None);
+    }
 }

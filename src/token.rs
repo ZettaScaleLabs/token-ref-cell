@@ -1,6 +1,6 @@
 //! Implementations of [`Token`] used with [`TokenCell`].
 //!
-//! The recommended token implementation is [`BoxedToken`].
+//! The recommended token implementation is [`BoxToken`].
 
 use core::{
     fmt,
@@ -9,7 +9,6 @@ use core::{
     ptr,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use std::num::NonZeroUsize;
 
 /// Token type to be used with [`TokenCell`](crate::TokenCell).
 ///
@@ -180,9 +179,9 @@ static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(1);
 /// This constraint comes from the trivial unicity implementation,
 /// an `AtomicUsize`, with no possible reuse of dropped tokens.
 /// You should use smart-pointer based token instead, as they use
-/// non-trivial unicity algorithm named "allocator".
+/// non-trivial unicity algorithm named "memory allocator".
 #[derive(Debug, Eq, PartialEq)]
-pub struct DynamicToken(NonZeroUsize);
+pub struct DynamicToken(usize);
 
 impl DynamicToken {
     #[inline]
@@ -210,7 +209,7 @@ impl DynamicToken {
             }
             abort();
         }
-        Self(NonZeroUsize::new(token).unwrap())
+        Self(token)
     }
 }
 
@@ -223,7 +222,7 @@ impl Default for DynamicToken {
 
 // SAFETY: Each `DynamicToken` has a different inner token and cannot be cloned
 unsafe impl Token for DynamicToken {
-    type Id = NonZeroUsize;
+    type Id = usize;
 
     #[inline]
     fn id(&self) -> Self::Id {
@@ -366,45 +365,47 @@ unsafe impl<T: ?Sized> Token for PinToken<T> {
     }
 }
 
-/// Dummy struct which can be used with smart-pointer-based token implementations.
-///
-/// Smart-pointer requires a non-zero-sized type parameter to be used as token.
-/// Use it if, like me, you don't like finding names for dummy objects;
-/// `Box<AllocatedToken>` is still better than `Box<u8>`.
-#[allow(dead_code)]
-#[derive(Debug, Default)]
-pub struct AllocatedToken(u8);
-
-/// A wrapper for `Box<AllocatedToken>`.
-///
-/// This is the recommended token implementation.
-#[derive(Debug, Default)]
-pub struct BoxedToken(Box<AllocatedToken>);
-
-impl BoxedToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-unsafe impl Token for BoxedToken {
-    type Id = <Box<AllocatedToken> as Token>::Id;
-
-    #[inline]
-    fn id(&self) -> Self::Id {
-        self.0.id()
-    }
-
-    #[inline]
-    fn is_unique(&mut self) -> bool {
-        self.0.is_unique()
-    }
-}
-
 #[cfg(feature = "alloc")]
-const _: () = {
+mod with_alloc {
     extern crate alloc;
     use alloc::{boxed::Box, rc::Rc, sync::Arc};
+
+    use crate::token::{PtrId, Token};
+
+    /// Dummy struct which can be used with smart-pointer-based token implementations.
+    ///
+    /// Smart-pointer requires a non-zero-sized type parameter to be used as token.
+    /// Use it if, like me, you don't like finding names for dummy objects;
+    /// `Box<AllocatedToken>` is still better than `Box<u8>`.
+    #[allow(dead_code)]
+    #[derive(Debug, Default)]
+    pub struct AllocatedToken(u8);
+
+    /// A wrapper for `Box<AllocatedToken>`.
+    ///
+    /// This is the recommended token implementation.
+    #[derive(Debug, Default)]
+    pub struct BoxToken(Box<AllocatedToken>);
+
+    impl BoxToken {
+        pub fn new() -> Self {
+            Self::default()
+        }
+    }
+
+    unsafe impl Token for BoxToken {
+        type Id = <Box<AllocatedToken> as Token>::Id;
+
+        #[inline]
+        fn id(&self) -> Self::Id {
+            self.0.id()
+        }
+
+        #[inline]
+        fn is_unique(&mut self) -> bool {
+            self.0.is_unique()
+        }
+    }
 
     trait NotZeroSized<T> {
         const ASSERT_SIZE_IS_NOT_ZERO: () = assert!(size_of::<T>() > 0);
@@ -480,4 +481,6 @@ const _: () = {
             Arc::get_mut(self).is_some()
         }
     }
-};
+}
+#[cfg(feature = "alloc")]
+pub use with_alloc::*;

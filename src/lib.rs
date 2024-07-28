@@ -5,23 +5,30 @@
 //! with multiple cells, it's possible for example to use a single mutex wrapping a token
 //! to synchronize mutable access to multiple `Arc` data.
 //!
-//! Multiple token [implementations](crate::token) are provided, the easiest to use being the
+//! Multiple token [implementations](token) are provided, the easiest to use being the
 //! smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`
-//! is not a ZST).
+//! is not a ZST). The recommended token implementation is [`BoxToken`], and it's the
+//! default value of the generic parameter of [`TokenCell`].
 //!
 //! # Examples
 //!
 //! ```rust
-//! # use std::sync::Arc;
-//! # use token_cell2::{TokenCell, token::AllocatedToken};
-//! let mut token = Box::new(AllocatedToken::default());
+//! # use std::sync::{Arc, RwLock};
+//! # use token_cell2::{TokenCell, BoxToken};
+//! let mut token = RwLock::new(BoxToken::new());
+//! // Initialize a vector of arcs
 //! let mut arc_vec = Vec::new();
+//! let token_ref = token.read().unwrap();
 //! for i in 0..4 {
-//!     arc_vec.push(Arc::new(TokenCell::new(i, &token)));
+//!     arc_vec.push(Arc::new(TokenCell::new(i, &*token_ref)));
 //! }
+//! drop(token_ref);
+//! // Use only one rwlock to write to all the arcs
+//! let mut token_mut = token.write().unwrap();
 //! for cell in &arc_vec {
-//!     *cell.borrow_mut(&mut token) += 1;
+//!     *cell.borrow_mut(&mut *token_mut) += 1;
 //! }
+//! drop(token_mut)
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -29,9 +36,9 @@
 use core::{
     cell::UnsafeCell,
     fmt,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
-use std::marker::PhantomData;
 
 use crate::{
     error::{BorrowError, BorrowMutError},
@@ -41,8 +48,15 @@ use crate::{
 pub mod error;
 pub mod token;
 
+#[cfg(feature = "alloc")]
+pub use token::BoxToken;
+
 /// Interior mutability cell using an external [`Token`] to synchronize accesses.
-pub struct TokenCell<T: ?Sized, Tk: Token + ?Sized> {
+pub struct TokenCell<
+    T: ?Sized,
+    #[cfg(not(feature = "alloc"))] Tk: Token + ?Sized,
+    #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
+> {
     token_id: Tk::Id,
     cell: UnsafeCell<T>,
 }
@@ -95,7 +109,7 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     }
 
     #[inline]
-    pub(crate) fn get_ref(&self, token_id: Tk::Id) -> Result<Ref<T, Tk>, BorrowError> {
+    fn get_ref(&self, token_id: Tk::Id) -> Result<Ref<T, Tk>, BorrowError> {
         if token_id == self.token_id {
             Ok(Ref {
                 token_id,
@@ -124,7 +138,7 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     ///
     /// Token id must be retrieved from a unique token.
     #[inline]
-    pub(crate) unsafe fn get_mut(&self, token_id: Tk::Id) -> Result<RefMut<T, Tk>, BorrowMutError> {
+    unsafe fn get_mut(&self, token_id: Tk::Id) -> Result<RefMut<T, Tk>, BorrowMutError> {
         if token_id == self.token_id {
             Ok(RefMut {
                 token_id,
@@ -166,6 +180,13 @@ impl<T: ?Sized, Tk: Token + ?Sized> Deref for TokenCell<T, Tk> {
     }
 }
 
+impl<T: ?Sized, Tk: Token + ?Sized> DerefMut for TokenCell<T, Tk> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cell
+    }
+}
+
 impl<T: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for TokenCell<T, Tk>
 where
     Tk::Id: fmt::Debug,
@@ -181,7 +202,12 @@ where
 ///
 /// The token can be reused for further borrowing.
 #[derive(Debug)]
-pub struct Ref<'b, T: ?Sized, Tk: Token + ?Sized> {
+pub struct Ref<
+    'b,
+    T: ?Sized,
+    #[cfg(not(feature = "alloc"))] Tk: Token + ?Sized,
+    #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
+> {
     token_id: Tk::Id,
     inner: &'b T,
     _phantom: PhantomData<&'b Tk>,
@@ -279,7 +305,12 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, T
 ///
 /// The token can be reused for further borrowing.
 #[derive(Debug)]
-pub struct RefMut<'b, T: ?Sized, Tk: Token + ?Sized> {
+pub struct RefMut<
+    'b,
+    T: ?Sized,
+    #[cfg(not(feature = "alloc"))] Tk: Token + ?Sized,
+    #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
+> {
     token_id: Tk::Id,
     inner: &'b mut T,
     _phantom: PhantomData<&'b mut Tk>,
@@ -414,23 +445,6 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         I: IntoIterator<Item = &'a TokenCell<U, Tk>> + 'a,
     {
         self.try_reborrow_iter_mut(cells, move |res| f(res.unwrap()))
-    }
-
-    #[inline]
-    pub fn reborrow_iter_mut2<U, I, R>(
-        &mut self,
-        cells: impl FnOnce(&mut T) -> I,
-        mut f: impl FnMut(RefMut<U, Tk>) -> R,
-    ) -> impl Iterator<Item = R>
-    where
-        I: IntoIterator,
-        I::Item: AsRef<TokenCell<U, Tk>>,
-    {
-        let token_id = self.token_id.clone();
-        cells(self.inner)
-            .into_iter()
-            // SAFETY: token uniqueness has been checked to build the `RefMut`
-            .map(move |cell| f(unsafe { cell.as_ref().get_mut(token_id.clone()).unwrap() }))
     }
 }
 
