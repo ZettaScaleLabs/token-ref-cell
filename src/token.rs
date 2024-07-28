@@ -1,4 +1,4 @@
-//! Implementations of [`Token`] used with [`TokenCell`].
+//! Implementations of [`Token`] used with [`TokenCell`](crate::TokenCell).
 //!
 //! The recommended token implementation is [`BoxToken`].
 
@@ -25,10 +25,11 @@ pub unsafe trait Token {
     fn is_unique(&mut self) -> bool;
 }
 
-/// Const token that can be used with [`TokenCell::new_const`].
+/// Const token that can be used with [`TokenCell::new_const`](crate::TokenCell::new_const).
 ///
-/// Tokens generated with [`singleton_token!`] macro implement this trait.
+/// Tokens generated with [`singleton_token!`](crate::singleton_token) macro implement this trait.
 pub trait ConstToken: Token {
+    /// Constant token id.
     const ID: Self::Id;
 }
 
@@ -168,7 +169,7 @@ macro_rules! singleton_token {
     };
 }
 
-static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(1);
+static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Dynamic token, equivalent to an `usize` in memory.
 ///
@@ -184,6 +185,7 @@ static DYNAMIC_COUNTER: AtomicUsize = AtomicUsize::new(1);
 pub struct DynamicToken(usize);
 
 impl DynamicToken {
+    /// Create a unique token.
     #[inline]
     pub fn new() -> Self {
         let token = DYNAMIC_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -244,12 +246,14 @@ unsafe impl Token for DynamicToken {
 pub struct RefMutToken<T: ?Sized>(T);
 
 impl<T: ?Sized> RefMutToken<T> {
+    /// Convert an immutable reference into an immutable `RefMutToken` reference.
     #[inline]
     pub fn from_ref(t: &T) -> &Self {
         // SAFETY: `RefMutToken` is `repr(transparent)`
         unsafe { &*(t as *const T as *const Self) }
     }
 
+    /// Convert a mutable reference into a mutable `RefMutToken` reference.
     #[inline]
     pub fn from_mut(t: &mut T) -> &mut Self {
         // SAFETY: `RefMutToken` is `repr(transparent)`
@@ -307,12 +311,14 @@ unsafe impl<T: ?Sized> Token for RefMutToken<T> {
 pub struct PinToken<T: ?Sized>(T);
 
 impl<T: ?Sized> PinToken<T> {
+    /// Convert an immutable reference into an immutable `RefMutToken` reference.
     #[inline]
     pub fn from_ref(t: Pin<&T>) -> &Self {
         // SAFETY: `PinToken` is `repr(transparent)`
         unsafe { &*(t.get_ref() as *const T as *const Self) }
     }
 
+    /// Convert a mutable reference into a mutable `RefMutToken` reference.
     #[inline]
     pub fn from_mut(t: Pin<&mut T>) -> &mut Self {
         // SAFETY: mutable ref is never accessed and `RefMutToken` is `repr(transparent)`
@@ -388,11 +394,13 @@ mod with_alloc {
     pub struct BoxToken(Box<AllocatedToken>);
 
     impl BoxToken {
+        /// Allocate a `BoxToken`.
         pub fn new() -> Self {
             Self::default()
         }
     }
 
+    // SAFETY: `BoxToken` is a wrapper around `Box` which implements `Token`
     unsafe impl Token for BoxToken {
         type Id = <Box<AllocatedToken> as Token>::Id;
 
@@ -413,6 +421,15 @@ mod with_alloc {
 
     impl<T> NotZeroSized<T> for T {}
 
+    macro_rules! check_not_zero_sized {
+        ($T:ty) => {
+            #[allow(path_statements)]
+            {
+                <$T>::ASSERT_SIZE_IS_NOT_ZERO;
+            }
+        };
+    }
+
     // SAFETY: It's not possible to have simultaneously two boxes with the same pointer/token id,
     // as long as `T` is not zero-sized (ensured by a compile-time check)
     /// `T` must not be zero-sized.
@@ -421,17 +438,13 @@ mod with_alloc {
 
         #[inline]
         fn id(&self) -> Self::Id {
-            {
-                T::ASSERT_SIZE_IS_NOT_ZERO
-            }
+            check_not_zero_sized!(T);
             self.as_ref().into()
         }
 
         #[inline]
         fn is_unique(&mut self) -> bool {
-            {
-                T::ASSERT_SIZE_IS_NOT_ZERO
-            }
+            check_not_zero_sized!(T);
             true
         }
     }
@@ -444,17 +457,13 @@ mod with_alloc {
 
         #[inline]
         fn id(&self) -> Self::Id {
-            {
-                T::ASSERT_SIZE_IS_NOT_ZERO
-            }
+            check_not_zero_sized!(T);
             self.as_ref().into()
         }
 
         #[inline]
         fn is_unique(&mut self) -> bool {
-            {
-                T::ASSERT_SIZE_IS_NOT_ZERO
-            }
+            check_not_zero_sized!(T);
             Rc::get_mut(self).is_some()
         }
     }
@@ -467,17 +476,13 @@ mod with_alloc {
 
         #[inline]
         fn id(&self) -> Self::Id {
-            {
-                T::ASSERT_SIZE_IS_NOT_ZERO
-            }
+            check_not_zero_sized!(T);
             self.as_ref().into()
         }
 
         #[inline]
         fn is_unique(&mut self) -> bool {
-            {
-                T::ASSERT_SIZE_IS_NOT_ZERO
-            }
+            check_not_zero_sized!(T);
             Arc::get_mut(self).is_some()
         }
     }

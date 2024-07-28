@@ -21,7 +21,7 @@ pub struct Node {
     edges: HashMap<NodeId, Arc<TokenCell<Node>>>,
 }
 
-pub struct NodeRef<'a>(Ref<'a, Node, BoxToken>);
+pub struct NodeRef<'a>(Ref<'a, Node>);
 
 impl<'a> Clone for NodeRef<'a> {
     fn clone(&self) -> Self {
@@ -59,10 +59,13 @@ impl Graph {
         let Some(node) = self.nodes.remove(&id) else {
             return false;
         };
-        for _ in node.borrow_mut(&mut self.token).reborrow_iter_mut(
-            |node| node.edges.values().map(AsRef::as_ref),
-            |mut other| other.edges.remove(&id),
-        ) {}
+        while let Some(mut other) = node
+            .borrow_mut(&mut self.token)
+            .reborrow_stateful_mut(|node| node.edges.values().map(AsRef::as_ref))
+            .reborrow_opt_mut(|edges| edges.next())
+        {
+            other.edges.remove(&id);
+        }
         true
     }
 
@@ -117,7 +120,7 @@ impl Node {
 
 impl Drop for Graph {
     fn drop(&mut self) {
-        self.clear()
+        self.clear();
     }
 }
 

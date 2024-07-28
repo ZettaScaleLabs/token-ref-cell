@@ -8,20 +8,27 @@ pub struct BorrowError;
 
 impl fmt::Display for BorrowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "already mutably borrowed")
+        write!(f, "wrong token")
     }
 }
 
 #[cfg(feature = "std")]
 impl std::error::Error for BorrowError {}
 
+#[allow(missing_docs)]
 /// Error returned by [`TokenCell::try_borrow_mut`](crate::TokenCell::try_borrow_mut).
 #[derive(Debug)]
-pub struct BorrowMutError;
+pub enum BorrowMutError {
+    WrongToken,
+    NotUniqueToken,
+}
 
 impl fmt::Display for BorrowMutError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "already borrowed")
+        match self {
+            Self::WrongToken => write!(f, "wrong token"),
+            Self::NotUniqueToken => write!(f, "not unique token"),
+        }
     }
 }
 
