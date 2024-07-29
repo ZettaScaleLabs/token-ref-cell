@@ -59,11 +59,10 @@ impl Graph {
         let Some(node) = self.nodes.remove(&id) else {
             return false;
         };
-        while let Some(mut other) = node
-            .borrow_mut(&mut self.token)
-            .reborrow_stateful_mut(|node| node.edges.values().map(AsRef::as_ref))
-            .reborrow_opt_mut(|edges| edges.next())
-        {
+        let mut node_mut = node.borrow_mut(&mut self.token);
+        let mut reborrow_mut =
+            node_mut.reborrow_stateful_mut(|node| node.edges.values().map(AsRef::as_ref));
+        while let Some(mut other) = reborrow_mut.reborrow_opt_mut(|edges| edges.next()) {
             other.edges.remove(&id);
         }
         true
