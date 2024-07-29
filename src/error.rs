@@ -6,6 +6,13 @@ use core::fmt;
 #[derive(Debug)]
 pub struct BorrowError;
 
+impl BorrowError {
+    // This ensures the panicking code is outlined from inlined functions
+    pub(crate) fn panic(self) -> ! {
+        panic!("{self}")
+    }
+}
+
 impl fmt::Display for BorrowError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "wrong token")
@@ -21,6 +28,13 @@ impl std::error::Error for BorrowError {}
 pub enum BorrowMutError {
     WrongToken,
     NotUniqueToken,
+}
+
+impl BorrowMutError {
+    // This ensures the panicking code is outlined from inlined functions
+    pub(crate) fn panic(self) -> ! {
+        panic!("{self}")
+    }
 }
 
 impl fmt::Display for BorrowMutError {
