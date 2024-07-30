@@ -54,6 +54,7 @@ pub mod token;
 #[cfg(feature = "alloc")]
 pub use token::BoxToken;
 
+// Outline panic formatting, see `RefCell` implementation
 macro_rules! unwrap {
     ($expr:expr) => {
         match $expr {
