@@ -357,10 +357,17 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
     ///
     /// It can be used for example to reborrow cells from an iterator.
     #[inline]
-    pub fn reborrow_stateful<'a, S>(&'a self, state: impl FnOnce(&'a T) -> S) -> Reborrow<S, Tk> {
+    pub fn reborrow_stateful<'a: 'b, S>(
+        &'a self,
+        state: impl FnOnce(&'a T) -> S,
+    ) -> Reborrow<'a, S, Tk>
+    where
+        'b: 'a,
+    {
         Reborrow {
             state: state(self.inner),
             token_id: self.token_id.clone(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -382,12 +389,13 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, T
 
 /// Stateful wrapper around a borrowed token shared reference.
 #[derive(Debug)]
-pub struct Reborrow<S, Tk: Token + ?Sized> {
+pub struct Reborrow<'b, S, Tk: Token + ?Sized> {
     state: S,
     token_id: Tk::Id,
+    _phantom: PhantomData<&'b Tk>,
 }
 
-impl<S, Tk: Token + ?Sized> Reborrow<S, Tk> {
+impl<'b, S, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
     /// Uses borrowed token shared reference to reborrow a [`TokenCell`].
     ///
     /// # Panics
@@ -433,7 +441,7 @@ impl<S, Tk: Token + ?Sized> Reborrow<S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> Deref for Reborrow<S, Tk> {
+impl<S, Tk: Token + ?Sized> Deref for Reborrow<'_, S, Tk> {
     type Target = S;
 
     #[inline]
@@ -442,7 +450,7 @@ impl<S, Tk: Token + ?Sized> Deref for Reborrow<S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> DerefMut for Reborrow<S, Tk> {
+impl<S, Tk: Token + ?Sized> DerefMut for Reborrow<'_, S, Tk> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
@@ -531,10 +539,14 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     pub fn reborrow_stateful_mut<'a, S>(
         &'a mut self,
         state: impl FnOnce(&'a mut T) -> S,
-    ) -> ReborrowMut<S, Tk> {
+    ) -> ReborrowMut<'a, S, Tk>
+    where
+        'b: 'a,
+    {
         ReborrowMut {
             state: state(self.inner),
             token_id: self.token_id.clone(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -562,12 +574,13 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for RefMut<'_, T
 }
 
 /// Stateful wrapper around a borrowed token exclusive reference.
-pub struct ReborrowMut<S, Tk: Token + ?Sized> {
+pub struct ReborrowMut<'b, S, Tk: Token + ?Sized> {
     state: S,
     token_id: Tk::Id,
+    _phantom: PhantomData<&'b mut Tk>,
 }
 
-impl<S, Tk: Token + ?Sized> ReborrowMut<S, Tk> {
+impl<S, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
     /// Uses borrowed token exclusive reference to reborrow a [`TokenCell`].
     ///
     /// # Panics
@@ -615,7 +628,7 @@ impl<S, Tk: Token + ?Sized> ReborrowMut<S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> Deref for ReborrowMut<S, Tk> {
+impl<S, Tk: Token + ?Sized> Deref for ReborrowMut<'_, S, Tk> {
     type Target = S;
 
     #[inline]
@@ -624,7 +637,7 @@ impl<S, Tk: Token + ?Sized> Deref for ReborrowMut<S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> DerefMut for ReborrowMut<S, Tk> {
+impl<S, Tk: Token + ?Sized> DerefMut for ReborrowMut<'_, S, Tk> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
