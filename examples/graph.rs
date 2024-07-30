@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use token_cell2::{BoxToken, Ref, TokenCell};
+use token_cell2::{BoxToken, TokenCell};
 
 #[derive(Debug, Default)]
 pub struct Graph {
@@ -21,31 +21,13 @@ pub struct Node {
     edges: HashMap<NodeId, Arc<TokenCell<Node>>>,
 }
 
-pub struct NodeRef<'a>(Ref<'a, Node>);
-
-impl<'a> Clone for NodeRef<'a> {
-    fn clone(&self) -> Self {
-        Self(Ref::clone(&self.0))
-    }
-}
-
-impl<'a> NodeRef<'a> {
-    pub fn id(&self) -> NodeId {
-        self.0.id
-    }
-
-    pub fn edges(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.0.edges.keys().copied()
-    }
-}
-
 impl Graph {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn get_node(&self, id: NodeId) -> Option<NodeRef> {
-        Some(NodeRef(self.nodes.get(&id)?.borrow(&self.token)))
+    pub fn get_node(&self, id: NodeId) -> Option<&Node> {
+        Some(self.nodes.get(&id)?.borrow(&self.token).into_ref())
     }
 
     pub fn insert_node(&mut self, id: NodeId) -> bool {
@@ -114,6 +96,14 @@ impl Node {
     fn new_cell(id: NodeId, token: &BoxToken) -> Arc<TokenCell<Node>> {
         let edges = HashMap::new();
         Arc::new(TokenCell::new(Node { id, edges }, token))
+    }
+
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+
+    pub fn edges(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.edges.keys().copied()
     }
 }
 

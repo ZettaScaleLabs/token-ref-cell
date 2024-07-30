@@ -286,6 +286,11 @@ pub struct Ref<
 }
 
 impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
+    /// Unwraps the inner reference.
+    pub fn into_ref(self) -> &'b T {
+        self.inner
+    }
+
     /// Copies a `Ref`.
     ///
     /// The [`TokenCell`] is already immutably borrowed, so this cannot fail.
@@ -354,13 +359,10 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
     ///
     /// It can be used for example to reborrow cells from an iterator.
     #[inline]
-    pub fn reborrow_stateful<'a: 'b, S>(
+    pub fn reborrow_stateful<'a, S>(
         &'a self,
         state: impl FnOnce(&'a T) -> S,
-    ) -> Reborrow<'a, S, Tk>
-    where
-        'b: 'a,
-    {
+    ) -> Reborrow<'a, S, Tk> {
         Reborrow {
             state: state(self.inner),
             token_id: self.token_id.clone(),
@@ -470,6 +472,11 @@ pub struct RefMut<
 }
 
 impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
+    /// Unwraps the inner reference.
+    pub fn into_mut(self) -> &'b mut T {
+        self.inner
+    }
+
     /// Borrows a `RefMut` as a [`Ref`].
     pub fn as_ref(&self) -> Ref<T, Tk> {
         Ref {
@@ -536,10 +543,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     pub fn reborrow_stateful_mut<'a, S>(
         &'a mut self,
         state: impl FnOnce(&'a mut T) -> S,
-    ) -> ReborrowMut<'a, S, Tk>
-    where
-        'b: 'a,
-    {
+    ) -> ReborrowMut<'a, S, Tk> {
         ReborrowMut {
             state: state(self.inner),
             token_id: self.token_id.clone(),
