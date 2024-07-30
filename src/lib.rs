@@ -12,11 +12,11 @@
 //! default value of the generic parameter of [`TokenCell`].
 //!
 //! The runtime cost is very lightweight: only one pointer comparison for
-//! [`TokenCell::borrow`]/[`TokenCell::try_borrow`] when using [`BoxToken`]
+//! [`TokenCell::borrow`]/[`TokenCell::borrow_mut`] when using [`BoxToken`]
 //! (and zero-cost when using [`singleton_token!`]).
 //! <br>
 //! Because one token can be used with multiple cells, it's possible for example to use
-//! a single mutex wrapping a token to synchronize mutable access to multiple `Arc` data.
+//! a single rwlock wrapping a token to synchronize mutable access to multiple `Arc` data.
 //!
 //! # Examples
 //!
@@ -25,11 +25,8 @@
 //! # use token_cell2::{TokenCell, BoxToken};
 //! let mut token = RwLock::new(BoxToken::new());
 //! // Initialize a vector of arcs
-//! let mut arc_vec = Vec::new();
 //! let token_ref = token.read().unwrap();
-//! for i in 0..4 {
-//!     arc_vec.push(Arc::new(TokenCell::new(i, &*token_ref)));
-//! }
+//! let arc_vec = vec![Arc::new(TokenCell::new(0, &*token_ref)); 42];
 //! drop(token_ref);
 //! // Use only one rwlock to write to all the arcs
 //! let mut token_mut = token.write().unwrap();
