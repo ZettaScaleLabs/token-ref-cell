@@ -294,8 +294,6 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
 
     /// Copies a `Ref`.
     ///
-    /// The [`TokenCell`] is already immutably borrowed, so this cannot fail.
-    ///
     /// This is an associated function that needs to be used as
     /// `Ref::clone(...)`. A `Clone` implementation or a method would interfere
     /// with the widespread use of `cell.borrow(&token).clone()` to clone the contents of
