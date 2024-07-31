@@ -15,7 +15,9 @@ use core::{
 /// # Safety
 ///
 /// If `Token::is_unique` returns true, then there must be no other instances of the same token
-/// type with `Token::id` returning the same id as the current "unique" instance.
+/// type with `Token::id` returning the same id as the current "unique" instance;
+/// if the token type is neither `Send` nor `Sync`, this unicity constraint is relaxed to the
+/// current thread.
 /// <br>
 /// Token implementations can rely on the fact that `TokenCell`, `Ref`, `RefMut`, `Reborrow`,
 /// and `ReborrowMut` are invariant on their `Tk: Token + ?Sized` generic parameter.
@@ -131,6 +133,11 @@ macro_rules! singleton_token {
             static INITIALIZED: ::core::sync::atomic::AtomicBool = ::core::sync::atomic::AtomicBool::new(false);
             impl $name {
                 #[inline]
+                $vis fn new() -> Self {
+                    Self::try_new().unwrap()
+                }
+
+                #[inline]
                 $vis fn try_new() -> Result<Self, $crate::error::AlreadyInitialized> {
                     if INITIALIZED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
                         Err($crate::error::AlreadyInitialized)
@@ -139,10 +146,6 @@ macro_rules! singleton_token {
                     }
                 }
 
-                #[inline]
-                $vis fn new() -> Self {
-                    Self::try_new().unwrap()
-                }
             }
 
             impl Drop for $name {
@@ -152,7 +155,7 @@ macro_rules! singleton_token {
                 }
             }
 
-            // SAFETY: Each forged token type can only have a single instance
+            // SAFETY: forged token initialization guarantees there is only one single instance
             unsafe impl $crate::token::Token for $name {
                 type Id = ();
 
@@ -494,3 +497,102 @@ mod with_alloc {
 }
 #[cfg(feature = "alloc")]
 pub use with_alloc::*;
+
+#[cfg(feature = "std")]
+mod with_std {
+    use std::{
+        any::TypeId, cell::RefCell, collections::BTreeSet, fmt, fmt::Formatter,
+        marker::PhantomData, sync::Mutex,
+    };
+
+    use crate::{error::AlreadyInitialized, token::Token};
+
+    static TYPED_TOKENS: Mutex<BTreeSet<TypeId>> = Mutex::new(BTreeSet::new());
+
+    /// Zero-sized token implementation which use a type as unicity marker.
+    pub struct TypedToken<T: ?Sized + 'static>(PhantomData<fn(T) -> T>);
+
+    impl<T: ?Sized + 'static> fmt::Debug for TypedToken<T> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            f.debug_struct("TypedToken").finish()
+        }
+    }
+
+    impl<T: ?Sized + 'static> TypedToken<T> {
+        fn new() -> Self {
+            Self::try_new().unwrap()
+        }
+
+        fn try_new() -> Result<Self, AlreadyInitialized> {
+            if TYPED_TOKENS.lock().unwrap().insert(TypeId::of::<Self>()) {
+                Ok(Self(PhantomData))
+            } else {
+                Err(AlreadyInitialized)
+            }
+        }
+    }
+
+    impl<T: ?Sized + 'static> Drop for TypedToken<T> {
+        fn drop(&mut self) {
+            TYPED_TOKENS.lock().unwrap().remove(&TypeId::of::<Self>());
+        }
+    }
+
+    // SAFETY: `TypedToken` initialization guarantees there is only one single instance
+    unsafe impl<T: ?Sized + 'static> Token for TypedToken<T> {
+        type Id = ();
+
+        fn id(&self) -> Self::Id {}
+
+        fn is_unique(&mut self) -> bool {
+            true
+        }
+    }
+
+    std::thread_local! {
+        static LOCAL_TYPED_TOKENS: RefCell<BTreeSet<TypeId>> = const { RefCell::new(BTreeSet::new()) };
+    }
+
+    /// Zero-sized thread-local token implementation which use a type as unicity marker.
+    pub struct LocalTypedToken<T: ?Sized + 'static>(PhantomData<*mut T>);
+
+    impl<T: ?Sized + 'static> fmt::Debug for LocalTypedToken<T> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            f.debug_struct("TypedToken").finish()
+        }
+    }
+
+    impl<T: ?Sized + 'static> LocalTypedToken<T> {
+        fn new() -> Self {
+            Self::try_new().unwrap()
+        }
+
+        fn try_new() -> Result<Self, AlreadyInitialized> {
+            if LOCAL_TYPED_TOKENS.with_borrow_mut(|types| types.insert(TypeId::of::<Self>())) {
+                Ok(Self(PhantomData))
+            } else {
+                Err(AlreadyInitialized)
+            }
+        }
+    }
+
+    impl<T: ?Sized + 'static> Drop for LocalTypedToken<T> {
+        fn drop(&mut self) {
+            LOCAL_TYPED_TOKENS.with_borrow_mut(|types| types.remove(&TypeId::of::<Self>()));
+        }
+    }
+
+    // SAFETY: `TypedToken` initialization guarantees there is only one single instance
+    unsafe impl<T: ?Sized + 'static> Token for LocalTypedToken<T> {
+        type Id = ();
+
+        fn id(&self) -> Self::Id {}
+
+        fn is_unique(&mut self) -> bool {
+            true
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+pub use with_std::*;

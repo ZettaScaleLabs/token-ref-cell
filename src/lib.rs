@@ -119,8 +119,9 @@ impl<T: ?Sized, Tk: Token + ?Sized> AsRef<TokenCell<T, Tk>> for &TokenCell<T, Tk
     }
 }
 
-// SAFETY: Inner `UnsafeCell` access is synchronized using `Token` uniqueness guarantee.
-unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenCell<T, Tk> where Tk::Id: Sync {}
+// SAFETY: Inner `UnsafeCell` access is synchronized using `Token` uniqueness guarantee,
+// for which cross-threads behavior requires the token type to implement `Send + Sync`.
+unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenCell<T, Tk> where Tk: Send + Sync {}
 
 impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
     /// Creates a new `TokenCell` containing a `value`, synchronized by the given `token`.
