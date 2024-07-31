@@ -15,17 +15,17 @@ use core::{
 ///
 /// # Safety
 ///
-/// If `Token::is_unique` returns true, then there must be no other instances of the same token
-/// type with `Token::id` returning the same id as the current "unique" instance;
+/// If [`Token::is_unique`] returns true, then there must be no other instances of the same token
+/// type with [`Token::id`] returning the same id as the current "unique" instance;
 /// if the token type is neither `Send` nor `Sync`, this unicity constraint is relaxed to the
 /// current thread.
 /// <br>
 /// Token implementations can rely on the fact that `TokenCell`, `Ref`, `RefMut`, `Reborrow`,
-/// and `ReborrowMut` are invariant on their `Tk: Token + ?Sized` generic parameter.
+/// and `ReborrowMut` are invariant on their `Tk: Token` generic parameter.
 pub unsafe trait Token {
     /// Id of the token.
     type Id: Clone + Eq;
-    /// Return the token id.
+    /// Returns the token id.
     fn id(&self) -> Self::Id;
     /// Returns true if the token is "unique", see [safety](Self#safety)
     fn is_unique(&mut self) -> bool;
@@ -542,7 +542,8 @@ mod with_std {
         }
     }
 
-    // SAFETY: `TypedToken` initialization guarantees there is only one single instance
+    // SAFETY: `TypedToken` initialization guarantees there is only one single instance,
+    // taking into account that it's invariant on `T`
     unsafe impl<T: ?Sized + 'static> Token for TypedToken<T> {
         type Id = ();
 
@@ -590,7 +591,8 @@ mod with_std {
         }
     }
 
-    // SAFETY: `TypedToken` initialization guarantees there is only one single instance
+    // SAFETY: `TypedToken` initialization guarantees there is only one single instance,
+    // taking into account that it's invariant on `T`
     unsafe impl<T: ?Sized + 'static> Token for LocalTypedToken<T> {
         type Id = ();
 
