@@ -76,6 +76,10 @@ impl<Tk: Token + ?Sized> TokenId<Tk> {
         let _phantom = PhantomData;
         Self { id, _phantom }
     }
+
+    fn id(&self) -> Tk::Id {
+        self.id.clone()
+    }
 }
 
 impl<Tk: Token + ?Sized> Clone for TokenId<Tk> {
@@ -121,14 +125,8 @@ unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenCell<T, Tk> wher
 impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
     /// Creates a new `TokenCell` containing a `value`, synchronized by the given `token`.
     #[inline]
-    pub fn new<'a>(value: T, token: &'a Tk) -> Self
-    where
-        Tk: 'a,
-    {
-        Self {
-            token_id: TokenId::new(token.id()),
-            cell: value.into(),
-        }
+    pub fn new(value: T, token: &Tk) -> Self {
+        Self::with_token_id(value, token.id())
     }
 
     /// Creates a new `TokenCell` containing a `value`, synchronized by a const token.
@@ -137,8 +135,16 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
     where
         Tk: ConstToken,
     {
+        Self::with_token_id(value, Tk::ID)
+    }
+
+    /// Creates a new `TokenCell` containing a `value`, synchronized by a token with the given id.
+    ///
+    /// It allows creating `TokenCell` when token is already borrowed.
+    #[inline]
+    pub const fn with_token_id(value: T, token_id: Tk::Id) -> Self {
         Self {
-            token_id: TokenId::new(Tk::ID),
+            token_id: TokenId::new(token_id),
             cell: UnsafeCell::new(value),
         }
     }
@@ -151,15 +157,6 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
 }
 
 impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
-    /// Set a new token to synchronize the cell.
-    #[inline]
-    pub fn set_token<'a>(&mut self, token: &'a Tk)
-    where
-        Tk: 'a,
-    {
-        self.token_id = TokenId::new(token.id());
-    }
-
     #[inline]
     fn get_ref(&self, token_id: TokenId<Tk>) -> Result<Ref<T, Tk>, BorrowError> {
         if self.token_id == token_id {
@@ -275,6 +272,24 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
         }
         // SAFETY: uniqueness is checked above
         unsafe { self.get_mut(TokenId::new(token.id())) }
+    }
+
+    /// Set a new token to synchronize the cell.
+    #[inline]
+    pub fn set_token(&mut self, token: &Tk) {
+        self.set_token_id(token.id());
+    }
+
+    /// Get the id of the token by which the cell is synchronized.
+    #[inline]
+    pub fn token_id(&self) -> Tk::Id {
+        self.token_id.id()
+    }
+
+    /// Set a new token_id to synchronize the cell.
+    #[inline]
+    pub fn set_token_id(&mut self, token_id: Tk::Id) {
+        self.token_id = TokenId::new(token_id);
     }
 }
 
@@ -402,6 +417,12 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
             _phantom: PhantomData,
         }
     }
+
+    /// Get the id of the borrowed token.
+    #[inline]
+    pub fn token_id(&self) -> Tk::Id {
+        self.token_id.id()
+    }
 }
 
 impl<T: ?Sized, Tk: Token + ?Sized> Deref for Ref<'_, T, Tk> {
@@ -481,6 +502,12 @@ impl<'b, S: ?Sized, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
         cell: impl FnOnce(&mut S) -> Option<&TokenCell<U, Tk>>,
     ) -> Option<Result<Ref<U, Tk>, BorrowError>> {
         Some(cell(&mut self.state)?.get_ref(self.token_id.clone()))
+    }
+
+    /// Get the id of the borrowed token.
+    #[inline]
+    pub fn token_id(&self) -> Tk::Id {
+        self.token_id.id()
     }
 }
 
@@ -605,6 +632,12 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
             _phantom: PhantomData,
         }
     }
+
+    /// Get the id of the borrowed token.
+    #[inline]
+    pub fn token_id(&self) -> Tk::Id {
+        self.token_id.id()
+    }
 }
 
 impl<T: ?Sized, Tk: Token + ?Sized> Deref for RefMut<'_, T, Tk> {
@@ -693,6 +726,12 @@ impl<S: ?Sized, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
     ) -> Option<Result<RefMut<U, Tk>, BorrowMutError>> {
         // SAFETY: token uniqueness has been checked to build the `RefMut` and then `ReborrowMut`.
         Some(unsafe { cell(&mut self.state)?.get_mut(self.token_id.clone()) })
+    }
+
+    /// Get the id of the borrowed token.
+    #[inline]
+    pub fn token_id(&self) -> Tk::Id {
+        self.token_id.id()
     }
 }
 
