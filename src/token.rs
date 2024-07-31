@@ -4,6 +4,7 @@
 
 use core::{
     fmt,
+    marker::PhantomData,
     ops::{Deref, DerefMut},
     pin::Pin,
     ptr,
@@ -505,7 +506,10 @@ mod with_std {
         marker::PhantomData, sync::Mutex,
     };
 
-    use crate::{error::AlreadyInitialized, token::Token};
+    use crate::{
+        error::AlreadyInitialized,
+        token::{ConstToken, Token},
+    };
 
     static TYPED_TOKENS: Mutex<BTreeSet<TypeId>> = Mutex::new(BTreeSet::new());
 
@@ -547,6 +551,10 @@ mod with_std {
         fn is_unique(&mut self) -> bool {
             true
         }
+    }
+
+    impl<T: ?Sized + 'static> ConstToken for TypedToken<T> {
+        const ID: Self::Id = ();
     }
 
     std::thread_local! {
@@ -592,7 +600,47 @@ mod with_std {
             true
         }
     }
+
+    impl<T: ?Sized + 'static> ConstToken for LocalTypedToken<T> {
+        const ID: Self::Id = ();
+    }
 }
 
 #[cfg(feature = "std")]
 pub use with_std::*;
+
+/// Lifetime-based token implementation.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LifetimeToken<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
+
+impl LifetimeToken<'_> {
+    /// Creates a `LifetimeToken` with a unique lifetime, only valid for the scope of
+    /// the provided closure.
+    pub fn scope<R>(f: impl FnOnce(LifetimeToken) -> R) -> R {
+        f(Self(PhantomData))
+    }
+}
+
+// SAFETY: The only way to instantiate a `LifetimeToken` is using `LifetimeToken::scope`, as
+// well as generativity, and both ensures that the unicity of the token by the unicity of its
+// lifetime.
+unsafe impl Token for LifetimeToken<'_> {
+    type Id = ();
+
+    fn id(&self) -> Self::Id {}
+
+    fn is_unique(&mut self) -> bool {
+        true
+    }
+}
+
+impl<'id> ConstToken for LifetimeToken<'id> {
+    const ID: Self::Id = ();
+}
+
+#[cfg(feature = "generativity")]
+impl<'id> From<generativity::Guard<'id>> for LifetimeToken<'id> {
+    fn from(_: generativity::Guard<'id>) -> Self {
+        Self(PhantomData)
+    }
+}

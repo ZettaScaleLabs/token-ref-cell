@@ -7,3 +7,6 @@ edition = "2021"
 default = ["std"]
 alloc = []
 std = ["alloc"]
+
+[dependencies]
+generativity = { version = "1", optional = true }
