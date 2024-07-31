@@ -214,7 +214,7 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     ///
     /// Token id must be retrieved from a unique token.
     #[inline]
-    unsafe fn get_mut(&self, token_id: TokenId<Tk>) -> Result<RefMut<T, Tk>, BorrowMutError> {
+    unsafe fn get_ref_mut(&self, token_id: TokenId<Tk>) -> Result<RefMut<T, Tk>, BorrowMutError> {
         if self.token_id == token_id {
             Ok(RefMut {
                 // SAFETY: `Token` trait guarantees that there can be only one token
@@ -272,7 +272,19 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
             return Err(BorrowMutError::NotUniqueToken);
         }
         // SAFETY: uniqueness is checked above
-        unsafe { self.get_mut(TokenId::new(token.id())) }
+        unsafe { self.get_ref_mut(TokenId::new(token.id())) }
+    }
+
+    /// Returns a mutable reference to the underlying data.
+    #[inline]
+    pub fn get_mut(&mut self) -> &mut T {
+        self.cell.get_mut()
+    }
+
+    /// Gets a mutable pointer to the wrapped value.
+    #[inline]
+    pub fn as_ptr(&self) -> *mut T {
+        self.cell.get()
     }
 
     /// Set a new token to synchronize the cell.
@@ -291,22 +303,6 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     #[inline]
     pub fn set_token_id(&mut self, token_id: Tk::Id) {
         self.token_id = TokenId::new(token_id);
-    }
-}
-
-impl<T: ?Sized, Tk: Token + ?Sized> Deref for TokenCell<T, Tk> {
-    type Target = UnsafeCell<T>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.cell
-    }
-}
-
-impl<T: ?Sized, Tk: Token + ?Sized> DerefMut for TokenCell<T, Tk> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.cell
     }
 }
 
@@ -591,7 +587,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         cell: impl FnOnce(&mut T) -> &TokenCell<U, Tk>,
     ) -> Result<RefMut<U, Tk>, BorrowMutError> {
         // SAFETY: token uniqueness has been checked to build the `RefMut`
-        unsafe { cell(self.inner).get_mut(self.token_id.clone()) }
+        unsafe { cell(self.inner).get_ref_mut(self.token_id.clone()) }
     }
 
     /// Uses borrowed token exclusive reference to optionally  reborrow a [`TokenCell`].
@@ -616,7 +612,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         cell: impl FnOnce(&mut T) -> Option<&TokenCell<U, Tk>>,
     ) -> Option<Result<RefMut<U, Tk>, BorrowMutError>> {
         // SAFETY: token uniqueness has been checked to build the `RefMut`
-        Some(unsafe { cell(self.inner)?.get_mut(self.token_id.clone()) })
+        Some(unsafe { cell(self.inner)?.get_ref_mut(self.token_id.clone()) })
     }
 
     /// Wraps the borrowed token exclusive reference into a stateful [`ReborrowMut`] instance.
@@ -703,7 +699,7 @@ impl<S: ?Sized, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
         cell: impl FnOnce(&mut S) -> &TokenCell<U, Tk>,
     ) -> Result<RefMut<U, Tk>, BorrowMutError> {
         // SAFETY: token uniqueness has been checked to build the `RefMut` and then `ReborrowMut`.
-        unsafe { cell(&mut self.state).get_mut(self.token_id.clone()) }
+        unsafe { cell(&mut self.state).get_ref_mut(self.token_id.clone()) }
     }
 
     /// Uses borrowed token exclusive reference to optionally  reborrow a [`TokenCell`].
@@ -726,7 +722,7 @@ impl<S: ?Sized, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
         cell: impl FnOnce(&mut S) -> Option<&TokenCell<U, Tk>>,
     ) -> Option<Result<RefMut<U, Tk>, BorrowMutError>> {
         // SAFETY: token uniqueness has been checked to build the `RefMut` and then `ReborrowMut`.
-        Some(unsafe { cell(&mut self.state)?.get_mut(self.token_id.clone()) })
+        Some(unsafe { cell(&mut self.state)?.get_ref_mut(self.token_id.clone()) })
     }
 
     /// Get the id of the borrowed token.
