@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(clippy::semicolon_if_nothing_returned)]
 #![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 //! This library provides [`TokenCell`], an interior mutability cell, which uses an
@@ -64,13 +65,47 @@ macro_rules! unwrap {
     };
 }
 
+// Ensure `Tk` invariance to avoid subtyping.
+struct TokenId<Tk: Token + ?Sized> {
+    id: Tk::Id,
+    _phantom: PhantomData<fn(Tk) -> Tk>,
+}
+
+impl<Tk: Token + ?Sized> TokenId<Tk> {
+    const fn new(id: Tk::Id) -> Self {
+        let _phantom = PhantomData;
+        Self { id, _phantom }
+    }
+}
+
+impl<Tk: Token + ?Sized> Clone for TokenId<Tk> {
+    fn clone(&self) -> Self {
+        Self::new(self.id.clone())
+    }
+}
+
+impl<Tk: Token + ?Sized> PartialEq for TokenId<Tk> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<Tk: Token + ?Sized> fmt::Debug for TokenId<Tk>
+where
+    Tk::Id: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.id, f)
+    }
+}
+
 /// Interior mutability cell using an external [`Token`] to synchronize accesses.
 pub struct TokenCell<
     T: ?Sized,
     #[cfg(not(feature = "alloc"))] Tk: Token + ?Sized,
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
 > {
-    token_id: Tk::Id,
+    token_id: TokenId<Tk>,
     cell: UnsafeCell<T>,
 }
 
@@ -91,7 +126,7 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
         Tk: 'a,
     {
         Self {
-            token_id: token.id(),
+            token_id: TokenId::new(token.id()),
             cell: value.into(),
         }
     }
@@ -103,7 +138,7 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
         Tk: ConstToken,
     {
         Self {
-            token_id: Tk::ID,
+            token_id: TokenId::new(Tk::ID),
             cell: UnsafeCell::new(value),
         }
     }
@@ -118,16 +153,16 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
 impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     /// Set a new token to synchronize the cell.
     #[inline]
-    pub fn set_token<'a>(&mut self, token: impl Into<&'a Tk>)
+    pub fn set_token<'a>(&mut self, token: &'a Tk)
     where
         Tk: 'a,
     {
-        self.token_id = token.into().id();
+        self.token_id = TokenId::new(token.id());
     }
 
     #[inline]
-    fn get_ref(&self, token_id: Tk::Id) -> Result<Ref<T, Tk>, BorrowError> {
-        if token_id == self.token_id {
+    fn get_ref(&self, token_id: TokenId<Tk>) -> Result<Ref<T, Tk>, BorrowError> {
+        if self.token_id == token_id {
             Ok(Ref {
                 // SAFETY: `Token` trait guarantees that there can be only one token
                 // able to borrow the cell. Having a shared reference to this token
@@ -174,15 +209,15 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     /// or locks.
     #[inline]
     pub fn try_borrow<'a>(&'a self, token: &'a Tk) -> Result<Ref<'a, T, Tk>, BorrowError> {
-        self.get_ref(token.id())
+        self.get_ref(TokenId::new(token.id()))
     }
 
     /// # Safety
     ///
     /// Token id must be retrieved from a unique token.
     #[inline]
-    unsafe fn get_mut(&self, token_id: Tk::Id) -> Result<RefMut<T, Tk>, BorrowMutError> {
-        if token_id == self.token_id {
+    unsafe fn get_mut(&self, token_id: TokenId<Tk>) -> Result<RefMut<T, Tk>, BorrowMutError> {
+        if self.token_id == token_id {
             Ok(RefMut {
                 // SAFETY: `Token` trait guarantees that there can be only one token
                 // able to borrow the cell. Having an exclusive reference to this token
@@ -239,7 +274,7 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
             return Err(BorrowMutError::NotUniqueToken);
         }
         // SAFETY: uniqueness is checked above
-        unsafe { self.get_mut(token.id()) }
+        unsafe { self.get_mut(TokenId::new(token.id())) }
     }
 }
 
@@ -274,7 +309,6 @@ where
 ///
 /// The token used for borrowing synchronization is also borrowed.
 /// Dedicated methods allows reusing the token for further borrowing.
-#[derive(Debug)]
 pub struct Ref<
     'b,
     T: ?Sized,
@@ -282,7 +316,7 @@ pub struct Ref<
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
 > {
     inner: &'b T,
-    token_id: Tk::Id,
+    token_id: TokenId<Tk>,
     _phantom: PhantomData<&'b Tk>,
 }
 
@@ -379,6 +413,18 @@ impl<T: ?Sized, Tk: Token + ?Sized> Deref for Ref<'_, T, Tk> {
     }
 }
 
+impl<T: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for Ref<'_, T, Tk>
+where
+    Tk::Id: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Ref")
+            .field("inner", &self.inner)
+            .field("token_id", &self.token_id)
+            .finish()
+    }
+}
+
 impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, Tk> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", &**self)
@@ -386,14 +432,13 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, T
 }
 
 /// Stateful wrapper around a borrowed token shared reference.
-#[derive(Debug)]
-pub struct Reborrow<'b, S, Tk: Token + ?Sized> {
-    state: S,
-    token_id: Tk::Id,
+pub struct Reborrow<'b, S: ?Sized, Tk: Token + ?Sized> {
+    token_id: TokenId<Tk>,
     _phantom: PhantomData<&'b Tk>,
+    state: S,
 }
 
-impl<'b, S, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
+impl<'b, S: ?Sized, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
     /// Uses borrowed token shared reference to reborrow a [`TokenCell`].
     ///
     /// # Panics
@@ -439,7 +484,7 @@ impl<'b, S, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> Deref for Reborrow<'_, S, Tk> {
+impl<S: ?Sized, Tk: Token + ?Sized> Deref for Reborrow<'_, S, Tk> {
     type Target = S;
 
     #[inline]
@@ -448,17 +493,28 @@ impl<S, Tk: Token + ?Sized> Deref for Reborrow<'_, S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> DerefMut for Reborrow<'_, S, Tk> {
+impl<S: ?Sized, Tk: Token + ?Sized> DerefMut for Reborrow<'_, S, Tk> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }
 }
 
+impl<S: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for Reborrow<'_, S, Tk>
+where
+    Tk::Id: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reborrow")
+            .field("state", &&self.state)
+            .field("token_id", &self.token_id)
+            .finish()
+    }
+}
+
 /// A wrapper type for a mutably borrowed value from a [`TokenCell`].
 ///
 /// The token can be reused for further borrowing.
-#[derive(Debug)]
 pub struct RefMut<
     'b,
     T: ?Sized,
@@ -466,7 +522,7 @@ pub struct RefMut<
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
 > {
     inner: &'b mut T,
-    token_id: Tk::Id,
+    token_id: TokenId<Tk>,
     _phantom: PhantomData<&'b mut Tk>,
 }
 
@@ -567,6 +623,18 @@ impl<T: ?Sized, Tk: Token + ?Sized> DerefMut for RefMut<'_, T, Tk> {
     }
 }
 
+impl<T: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for RefMut<'_, T, Tk>
+where
+    Tk::Id: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefMut")
+            .field("inner", &self.inner)
+            .field("token_id", &self.token_id)
+            .finish()
+    }
+}
+
 impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for RefMut<'_, T, Tk> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", &**self)
@@ -574,13 +642,13 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for RefMut<'_, T
 }
 
 /// Stateful wrapper around a borrowed token exclusive reference.
-pub struct ReborrowMut<'b, S, Tk: Token + ?Sized> {
-    state: S,
-    token_id: Tk::Id,
+pub struct ReborrowMut<'b, S: ?Sized, Tk: Token + ?Sized> {
+    token_id: TokenId<Tk>,
     _phantom: PhantomData<&'b mut Tk>,
+    state: S,
 }
 
-impl<S, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
+impl<S: ?Sized, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
     /// Uses borrowed token exclusive reference to reborrow a [`TokenCell`].
     ///
     /// # Panics
@@ -628,7 +696,7 @@ impl<S, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> Deref for ReborrowMut<'_, S, Tk> {
+impl<S: ?Sized, Tk: Token + ?Sized> Deref for ReborrowMut<'_, S, Tk> {
     type Target = S;
 
     #[inline]
@@ -637,9 +705,21 @@ impl<S, Tk: Token + ?Sized> Deref for ReborrowMut<'_, S, Tk> {
     }
 }
 
-impl<S, Tk: Token + ?Sized> DerefMut for ReborrowMut<'_, S, Tk> {
+impl<S: ?Sized, Tk: Token + ?Sized> DerefMut for ReborrowMut<'_, S, Tk> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
+    }
+}
+
+impl<S: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for ReborrowMut<'_, S, Tk>
+where
+    Tk::Id: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReborrowMut")
+            .field("state", &&self.state)
+            .field("token_id", &self.token_id)
+            .finish()
     }
 }

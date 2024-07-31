@@ -16,6 +16,9 @@ use core::{
 ///
 /// If `Token::is_unique` returns true, then there must be no other instances of the same token
 /// type with `Token::id` returning the same id as the current "unique" instance.
+/// <br>
+/// Token implementations can rely on the fact that `TokenCell`, `Ref`, `RefMut`, `Reborrow`,
+/// and `ReborrowMut` are invariant on their `Tk: Token + ?Sized` generic parameter.
 pub unsafe trait Token {
     /// Id of the token.
     type Id: Clone + Eq;
@@ -242,6 +245,7 @@ unsafe impl Token for DynamicToken {
 /// The reference should point to a pinned object, otherwise moving
 /// the object will "invalidate" the  cells initialized with the
 /// previous reference.
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct RefMutToken<T: ?Sized>(T);
 
@@ -307,6 +311,7 @@ unsafe impl<T: ?Sized> Token for RefMutToken<T> {
 }
 
 /// Abstraction of a pinned exclusive/mutable reference as a token.
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct PinToken<T: ?Sized>(T);
 
