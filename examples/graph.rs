@@ -5,11 +5,11 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use token_cell2::{BoxToken, TokenCell};
+use token_ref_cell::{BoxToken, TokenRefCell};
 
 #[derive(Debug, Default)]
 pub struct Graph {
-    nodes: HashMap<NodeId, Arc<TokenCell<Node>>>,
+    nodes: HashMap<NodeId, Arc<TokenRefCell<Node>>>,
     token: BoxToken,
 }
 
@@ -18,7 +18,7 @@ pub type NodeId = usize;
 #[derive(Debug, Default)]
 pub struct Node {
     id: NodeId,
-    edges: HashMap<NodeId, Arc<TokenCell<Node>>>,
+    edges: HashMap<NodeId, Arc<TokenRefCell<Node>>>,
 }
 
 impl Graph {
@@ -93,9 +93,9 @@ impl Graph {
 }
 
 impl Node {
-    fn new_cell(id: NodeId, token: &BoxToken) -> Arc<TokenCell<Node>> {
+    fn new_cell(id: NodeId, token: &BoxToken) -> Arc<TokenRefCell<Node>> {
         let edges = HashMap::new();
-        Arc::new(TokenCell::new(Node { id, edges }, token))
+        Arc::new(TokenRefCell::new(Node { id, edges }, token))
     }
 
     pub fn id(&self) -> NodeId {

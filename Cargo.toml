@@ -1,5 +1,5 @@
 [package]
-name = "token_cell2"
+name = "token-ref-cell"
 version = "0.1.0"
 edition = "2021"
 

@@ -4,16 +4,16 @@
 #![deny(missing_debug_implementations)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
-//! This library provides [`TokenCell`], an interior mutability cell, which uses an
+//! This library provides [`TokenRefCell`], an interior mutability cell, which uses an
 //! external [`Token`] to synchronize its accesses.
 //!
 //! Multiple token [implementations](token) are provided, the easiest to use being the
 //! smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`
 //! is not a ZST). The recommended token implementation is [`BoxToken`], and it's the
-//! default value of the generic parameter of [`TokenCell`].
+//! default value of the generic parameter of [`TokenRefCell`].
 //!
 //! The runtime cost is very lightweight: only one pointer comparison for
-//! [`TokenCell::borrow`]/[`TokenCell::borrow_mut`] when using [`BoxToken`]
+//! [`TokenRefCell::borrow`]/[`TokenRefCell::borrow_mut`] when using [`BoxToken`]
 //! (and zero-cost when using [`singleton_token!`]).
 //! <br>
 //! Because one token can be used with multiple cells, it's possible for example to use
@@ -23,11 +23,11 @@
 //!
 //! ```rust
 //! # use std::sync::{Arc, RwLock};
-//! # use token_cell2::{TokenCell, BoxToken};
+//! # use token_ref_cell::{TokenRefCell, BoxToken};
 //! let mut token = RwLock::new(BoxToken::new());
 //! // Initialize a vector of arcs
 //! let token_ref = token.read().unwrap();
-//! let arc_vec = vec![Arc::new(TokenCell::new(0, &*token_ref)); 42];
+//! let arc_vec = vec![Arc::new(TokenRefCell::new(0, &*token_ref)); 42];
 //! drop(token_ref);
 //! // Use only one rwlock to write to all the arcs
 //! let mut token_mut = token.write().unwrap();
@@ -104,7 +104,7 @@ where
 }
 
 /// Interior mutability cell using an external [`Token`] to synchronize accesses.
-pub struct TokenCell<
+pub struct TokenRefCell<
     T: ?Sized,
     #[cfg(not(feature = "alloc"))] Tk: Token + ?Sized,
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
@@ -113,24 +113,24 @@ pub struct TokenCell<
     cell: UnsafeCell<T>,
 }
 
-impl<T: ?Sized, Tk: Token + ?Sized> AsRef<TokenCell<T, Tk>> for &TokenCell<T, Tk> {
-    fn as_ref(&self) -> &TokenCell<T, Tk> {
+impl<T: ?Sized, Tk: Token + ?Sized> AsRef<TokenRefCell<T, Tk>> for &TokenRefCell<T, Tk> {
+    fn as_ref(&self) -> &TokenRefCell<T, Tk> {
         self
     }
 }
 
 // SAFETY: Inner `UnsafeCell` access is synchronized using `Token` uniqueness guarantee,
 // for which cross-threads behavior requires the token type to implement `Send + Sync`.
-unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenCell<T, Tk> where Tk: Send + Sync {}
+unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenRefCell<T, Tk> where Tk: Send + Sync {}
 
-impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
-    /// Creates a new `TokenCell` containing a `value`, synchronized by the given `token`.
+impl<T, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
+    /// Creates a new `TokenRefCell` containing a `value`, synchronized by the given `token`.
     #[inline]
     pub fn new(value: T, token: &Tk) -> Self {
         Self::with_token_id(value, token.id())
     }
 
-    /// Creates a new `TokenCell` containing a `value`, synchronized by a const token.
+    /// Creates a new `TokenRefCell` containing a `value`, synchronized by a const token.
     #[inline]
     pub fn new_const(value: T) -> Self
     where
@@ -139,9 +139,9 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
         Self::with_token_id(value, Tk::ID)
     }
 
-    /// Creates a new `TokenCell` containing a `value`, synchronized by a token with the given id.
+    /// Creates a new `TokenRefCell` containing a `value`, synchronized by a token with the given id.
     ///
-    /// It allows creating `TokenCell` when token is already borrowed.
+    /// It allows creating `TokenRefCell` when token is already borrowed.
     #[inline]
     pub const fn with_token_id(value: T, token_id: Tk::Id) -> Self {
         Self {
@@ -150,14 +150,14 @@ impl<T, Tk: Token + ?Sized> TokenCell<T, Tk> {
         }
     }
 
-    /// Consumes the `TokenCell`, returning the wrapped value.
+    /// Consumes the `TokenRefCell`, returning the wrapped value.
     #[inline]
     pub fn into_inner(self) -> T {
         self.cell.into_inner()
     }
 }
 
-impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
+impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     #[inline]
     fn get_ref(&self, token_id: TokenId<Tk>) -> Result<Ref<T, Tk>, BorrowError> {
         if self.token_id == token_id {
@@ -306,18 +306,18 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenCell<T, Tk> {
     }
 }
 
-impl<T: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for TokenCell<T, Tk>
+impl<T: ?Sized + fmt::Debug, Tk: Token + ?Sized> fmt::Debug for TokenRefCell<T, Tk>
 where
     Tk::Id: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TokenCell")
+        f.debug_struct("TokenRefCell")
             .field("token", &self.token_id)
             .finish_non_exhaustive()
     }
 }
 
-/// A wrapper type for an immutably borrowed value from a [`TokenCell`].
+/// A wrapper type for an immutably borrowed value from a [`TokenRefCell`].
 ///
 /// The token used for borrowing synchronization is also borrowed.
 /// Dedicated methods allows reusing the token for further borrowing.
@@ -343,7 +343,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
     /// This is an associated function that needs to be used as
     /// `Ref::clone(...)`. A `Clone` implementation or a method would interfere
     /// with the widespread use of `cell.borrow(&token).clone()` to clone the contents of
-    /// a `TokenCell`.
+    /// a `TokenRefCell`.
     #[allow(clippy::should_implement_trait)]
     #[must_use]
     #[inline]
@@ -355,47 +355,47 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
         }
     }
 
-    /// Uses borrowed token shared reference to reborrow a [`TokenCell`].
+    /// Uses borrowed token shared reference to reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow`].
+    /// See [`TokenRefCell::borrow`].
     #[inline]
-    pub fn reborrow<U: ?Sized>(&self, cell: impl FnOnce(&T) -> &TokenCell<U, Tk>) -> Ref<U, Tk> {
+    pub fn reborrow<U: ?Sized>(&self, cell: impl FnOnce(&T) -> &TokenRefCell<U, Tk>) -> Ref<U, Tk> {
         unwrap!(self.try_reborrow(cell))
     }
 
-    /// Uses borrowed token shared reference to reborrow a `TokenCell`.
+    /// Uses borrowed token shared reference to reborrow a `TokenRefCell`.
     ///
-    /// See [`TokenCell::try_borrow`].
+    /// See [`TokenRefCell::try_borrow`].
     #[inline]
     pub fn try_reborrow<U: ?Sized>(
         &self,
-        cell: impl FnOnce(&T) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&T) -> &TokenRefCell<U, Tk>,
     ) -> Result<Ref<U, Tk>, BorrowError> {
         cell(self.inner).get_ref(self.token_id.clone())
     }
 
-    /// Uses borrowed token shared reference to optionally reborrow a [`TokenCell`].
+    /// Uses borrowed token shared reference to optionally reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow`].
+    /// See [`TokenRefCell::borrow`].
     #[inline]
     pub fn reborrow_opt<U: ?Sized>(
         &self,
-        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&T) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<Ref<U, Tk>> {
         Some(unwrap!(self.try_reborrow_opt(cell)?))
     }
 
-    /// Uses borrowed token shared reference to optionally reborrow a [`TokenCell`].
+    /// Uses borrowed token shared reference to optionally reborrow a [`TokenRefCell`].
     ///
-    /// See [`TokenCell::try_borrow`].
+    /// See [`TokenRefCell::try_borrow`].
     #[inline]
     pub fn try_reborrow_opt<U: ?Sized>(
         &self,
-        cell: impl FnOnce(&T) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&T) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<Result<Ref<U, Tk>, BorrowError>> {
         Some(cell(self.inner)?.get_ref(self.token_id.clone()))
     }
@@ -457,46 +457,46 @@ pub struct Reborrow<'b, S: ?Sized, Tk: Token + ?Sized> {
 }
 
 impl<'b, S: ?Sized, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
-    /// Uses borrowed token shared reference to reborrow a [`TokenCell`].
+    /// Uses borrowed token shared reference to reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow`].
+    /// See [`TokenRefCell::borrow`].
     pub fn reborrow<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut S) -> &TokenRefCell<U, Tk>,
     ) -> Ref<U, Tk> {
         unwrap!(self.try_reborrow(cell))
     }
 
-    /// Uses borrowed token shared reference to reborrow a `TokenCell`.
+    /// Uses borrowed token shared reference to reborrow a `TokenRefCell`.
     ///
-    /// See [`TokenCell::try_borrow`].
+    /// See [`TokenRefCell::try_borrow`].
     pub fn try_reborrow<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut S) -> &TokenRefCell<U, Tk>,
     ) -> Result<Ref<U, Tk>, BorrowError> {
         cell(&mut self.state).get_ref(self.token_id.clone())
     }
 
-    /// Uses borrowed token shared reference to optionally reborrow a [`TokenCell`].
+    /// Uses borrowed token shared reference to optionally reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow`].
+    /// See [`TokenRefCell::borrow`].
     pub fn reborrow_opt<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut S) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<Ref<U, Tk>> {
         Some(unwrap!(self.try_reborrow_opt(cell)?))
     }
 
-    /// Uses borrowed token shared reference to optionally reborrow a [`TokenCell`].
+    /// Uses borrowed token shared reference to optionally reborrow a [`TokenRefCell`].
     ///
-    /// See [`TokenCell::try_borrow`].
+    /// See [`TokenRefCell::try_borrow`].
     pub fn try_reborrow_opt<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut S) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<Result<Ref<U, Tk>, BorrowError>> {
         Some(cell(&mut self.state)?.get_ref(self.token_id.clone()))
     }
@@ -536,7 +536,7 @@ where
     }
 }
 
-/// A wrapper type for a mutably borrowed value from a [`TokenCell`].
+/// A wrapper type for a mutably borrowed value from a [`TokenRefCell`].
 ///
 /// The token can be reused for further borrowing.
 pub struct RefMut<
@@ -565,51 +565,51 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         }
     }
 
-    /// Uses borrowed token exclusive reference to reborrow a [`TokenCell`].
+    /// Uses borrowed token exclusive reference to reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow_mut`].
+    /// See [`TokenRefCell::borrow_mut`].
     #[inline]
     pub fn reborrow_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut T) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut T) -> &TokenRefCell<U, Tk>,
     ) -> RefMut<U, Tk> {
         unwrap!(self.try_reborrow_mut(cell))
     }
 
-    /// Uses borrowed token exclusive reference to reborrow a `TokenCell`.
+    /// Uses borrowed token exclusive reference to reborrow a `TokenRefCell`.
     ///
-    /// See [`TokenCell::try_borrow_mut`].
+    /// See [`TokenRefCell::try_borrow_mut`].
     #[inline]
     pub fn try_reborrow_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut T) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut T) -> &TokenRefCell<U, Tk>,
     ) -> Result<RefMut<U, Tk>, BorrowMutError> {
         // SAFETY: token uniqueness has been checked to build the `RefMut`
         unsafe { cell(self.inner).get_ref_mut(self.token_id.clone()) }
     }
 
-    /// Uses borrowed token exclusive reference to optionally  reborrow a [`TokenCell`].
+    /// Uses borrowed token exclusive reference to optionally  reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow_mut`].
+    /// See [`TokenRefCell::borrow_mut`].
     #[inline]
     pub fn reborrow_opt_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut T) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut T) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<RefMut<U, Tk>> {
         Some(unwrap!(self.try_reborrow_opt_mut(cell)?))
     }
 
-    /// Uses borrowed token exclusive reference to optionally reborrow a `TokenCell`.
+    /// Uses borrowed token exclusive reference to optionally reborrow a `TokenRefCell`.
     ///
-    /// See [`TokenCell::try_borrow_mut`].
+    /// See [`TokenRefCell::try_borrow_mut`].
     #[inline]
     pub fn try_reborrow_opt_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut T) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut T) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<Result<RefMut<U, Tk>, BorrowMutError>> {
         // SAFETY: token uniqueness has been checked to build the `RefMut`
         Some(unsafe { cell(self.inner)?.get_ref_mut(self.token_id.clone()) })
@@ -679,47 +679,47 @@ pub struct ReborrowMut<'b, S: ?Sized, Tk: Token + ?Sized> {
 }
 
 impl<S: ?Sized, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
-    /// Uses borrowed token exclusive reference to reborrow a [`TokenCell`].
+    /// Uses borrowed token exclusive reference to reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow_mut`].
+    /// See [`TokenRefCell::borrow_mut`].
     pub fn reborrow_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut S) -> &TokenRefCell<U, Tk>,
     ) -> RefMut<U, Tk> {
         unwrap!(self.try_reborrow_mut(cell))
     }
 
-    /// Uses borrowed token exclusive reference to reborrow a `TokenCell`.
+    /// Uses borrowed token exclusive reference to reborrow a `TokenRefCell`.
     ///
-    /// See [`TokenCell::try_borrow_mut`].
+    /// See [`TokenRefCell::try_borrow_mut`].
     pub fn try_reborrow_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> &TokenCell<U, Tk>,
+        cell: impl FnOnce(&mut S) -> &TokenRefCell<U, Tk>,
     ) -> Result<RefMut<U, Tk>, BorrowMutError> {
         // SAFETY: token uniqueness has been checked to build the `RefMut` and then `ReborrowMut`.
         unsafe { cell(&mut self.state).get_ref_mut(self.token_id.clone()) }
     }
 
-    /// Uses borrowed token exclusive reference to optionally  reborrow a [`TokenCell`].
+    /// Uses borrowed token exclusive reference to optionally  reborrow a [`TokenRefCell`].
     ///
     /// # Panics
     ///
-    /// See [`TokenCell::borrow_mut`].
+    /// See [`TokenRefCell::borrow_mut`].
     pub fn reborrow_opt_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut S) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<RefMut<U, Tk>> {
         Some(unwrap!(self.try_reborrow_opt_mut(cell)?))
     }
 
-    /// Uses borrowed token exclusive reference to optionally reborrow a `TokenCell`.
+    /// Uses borrowed token exclusive reference to optionally reborrow a `TokenRefCell`.
     ///
-    /// See [`TokenCell::try_borrow_mut`].
+    /// See [`TokenRefCell::try_borrow_mut`].
     pub fn try_reborrow_opt_mut<U: ?Sized>(
         &mut self,
-        cell: impl FnOnce(&mut S) -> Option<&TokenCell<U, Tk>>,
+        cell: impl FnOnce(&mut S) -> Option<&TokenRefCell<U, Tk>>,
     ) -> Option<Result<RefMut<U, Tk>, BorrowMutError>> {
         // SAFETY: token uniqueness has been checked to build the `RefMut` and then `ReborrowMut`.
         Some(unsafe { cell(&mut self.state)?.get_ref_mut(self.token_id.clone()) })

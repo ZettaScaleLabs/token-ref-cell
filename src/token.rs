@@ -1,4 +1,4 @@
-//! Implementations of [`Token`] used with [`TokenCell`](crate::TokenCell).
+//! Implementations of [`Token`] used with [`TokenRefCell`](crate::TokenRefCell).
 //!
 //! The recommended token implementation is [`BoxToken`].
 
@@ -11,7 +11,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-/// Token type to be used with [`TokenCell`](crate::TokenCell).
+/// Token type to be used with [`TokenRefCell`](crate::TokenRefCell).
 ///
 /// # Safety
 ///
@@ -20,7 +20,7 @@ use core::{
 /// if the token type is neither `Send` nor `Sync`, this unicity constraint is relaxed to the
 /// current thread.
 /// <br>
-/// Token implementations can rely on the fact that `TokenCell`, `Ref`, `RefMut`, `Reborrow`,
+/// Token implementations can rely on the fact that `TokenRefCell`, `Ref`, `RefMut`, `Reborrow`,
 /// and `ReborrowMut` are invariant on their `Tk: Token` generic parameter.
 pub unsafe trait Token {
     /// Id of the token.
@@ -31,7 +31,7 @@ pub unsafe trait Token {
     fn is_unique(&mut self) -> bool;
 }
 
-/// Const token that can be used with [`TokenCell::new_const`](crate::TokenCell::new_const).
+/// Const token that can be used with [`TokenRefCell::new_const`](crate::TokenRefCell::new_const).
 ///
 /// Tokens generated with [`singleton_token!`](crate::singleton_token) macro implement this trait.
 pub trait ConstToken: Token {
@@ -523,11 +523,13 @@ mod with_std {
     }
 
     impl<T: ?Sized + 'static> TypedToken<T> {
-        fn new() -> Self {
+        /// Initializes a `TypedToken`.
+        pub fn new() -> Self {
             Self::try_new().unwrap()
         }
 
-        fn try_new() -> Result<Self, AlreadyInitialized> {
+        /// Initializes `TypedToken`, fails if it has already been initialized.
+        pub fn try_new() -> Result<Self, AlreadyInitialized> {
             if TYPED_TOKENS.lock().unwrap().insert(TypeId::of::<Self>()) {
                 Ok(Self(PhantomData))
             } else {
@@ -572,11 +574,13 @@ mod with_std {
     }
 
     impl<T: ?Sized + 'static> LocalTypedToken<T> {
-        fn new() -> Self {
+        /// Initializes a `LocalTypedToken`.
+        pub fn new() -> Self {
             Self::try_new().unwrap()
         }
 
-        fn try_new() -> Result<Self, AlreadyInitialized> {
+        /// Initializes a `LocalTypedToken`, fails if it has already been initialized in the thread.
+        pub fn try_new() -> Result<Self, AlreadyInitialized> {
             if LOCAL_TYPED_TOKENS.with_borrow_mut(|types| types.insert(TypeId::of::<Self>())) {
                 Ok(Self(PhantomData))
             } else {

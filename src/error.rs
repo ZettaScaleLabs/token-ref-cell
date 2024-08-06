@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-/// Error returned by [`TokenCell::try_borrow`](crate::TokenCell::try_borrow).
+/// Error returned by [`TokenRefCell::try_borrow`](crate::TokenRefCell::try_borrow).
 #[derive(Debug)]
 pub struct BorrowError;
 
@@ -23,7 +23,7 @@ impl fmt::Display for BorrowError {
 impl std::error::Error for BorrowError {}
 
 #[allow(missing_docs)]
-/// Error returned by [`TokenCell::try_borrow_mut`](crate::TokenCell::try_borrow_mut).
+/// Error returned by [`TokenRefCell::try_borrow_mut`](crate::TokenRefCell::try_borrow_mut).
 #[derive(Debug)]
 pub enum BorrowMutError {
     WrongToken,
