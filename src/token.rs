@@ -511,26 +511,26 @@ mod with_std {
 
     use crate::{error::AlreadyInitialized, token::Token};
 
-    static TYPED_TOKENS: Mutex<BTreeSet<TypeId>> = Mutex::new(BTreeSet::new());
+    static TYPE_TOKENS: Mutex<BTreeSet<TypeId>> = Mutex::new(BTreeSet::new());
 
     /// Zero-sized token implementation which use a type as unicity marker.
-    pub struct TypedToken<T: ?Sized + 'static>(PhantomData<fn(T) -> T>);
+    pub struct TypeToken<T: ?Sized + 'static>(PhantomData<fn(T) -> T>);
 
-    impl<T: ?Sized + 'static> fmt::Debug for TypedToken<T> {
+    impl<T: ?Sized + 'static> fmt::Debug for TypeToken<T> {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            f.debug_struct("TypedToken").finish()
+            f.debug_struct("TypeToken").finish()
         }
     }
 
-    impl<T: ?Sized + 'static> TypedToken<T> {
-        /// Initializes a `TypedToken`.
+    impl<T: ?Sized + 'static> TypeToken<T> {
+        /// Initializes a `TypeToken`.
         pub fn new() -> Self {
             Self::try_new().unwrap()
         }
 
-        /// Initializes `TypedToken`, fails if it has already been initialized.
+        /// Initializes `TypeToken`, fails if it has already been initialized.
         pub fn try_new() -> Result<Self, AlreadyInitialized> {
-            if TYPED_TOKENS.lock().unwrap().insert(TypeId::of::<Self>()) {
+            if TYPE_TOKENS.lock().unwrap().insert(TypeId::of::<Self>()) {
                 Ok(Self(PhantomData))
             } else {
                 Err(AlreadyInitialized)
@@ -538,15 +538,15 @@ mod with_std {
         }
     }
 
-    impl<T: ?Sized + 'static> Drop for TypedToken<T> {
+    impl<T: ?Sized + 'static> Drop for TypeToken<T> {
         fn drop(&mut self) {
-            TYPED_TOKENS.lock().unwrap().remove(&TypeId::of::<Self>());
+            TYPE_TOKENS.lock().unwrap().remove(&TypeId::of::<Self>());
         }
     }
 
-    // SAFETY: `TypedToken` initialization guarantees there is only one single instance,
+    // SAFETY: `TypeToken` initialization guarantees there is only one single instance,
     // taking into account that it's invariant on `T`
-    unsafe impl<T: ?Sized + 'static> Token for TypedToken<T> {
+    unsafe impl<T: ?Sized + 'static> Token for TypeToken<T> {
         type Id = ();
 
         fn id(&self) -> Self::Id {}
@@ -557,27 +557,27 @@ mod with_std {
     }
 
     std::thread_local! {
-        static LOCAL_TYPED_TOKENS: RefCell<BTreeSet<TypeId>> = const { RefCell::new(BTreeSet::new()) };
+        static LOCAL_TYPE_TOKENS: RefCell<BTreeSet<TypeId>> = const { RefCell::new(BTreeSet::new()) };
     }
 
     /// Zero-sized thread-local token implementation which use a type as unicity marker.
-    pub struct LocalTypedToken<T: ?Sized + 'static>(PhantomData<*mut T>);
+    pub struct LocalTypeToken<T: ?Sized + 'static>(PhantomData<*mut T>);
 
-    impl<T: ?Sized + 'static> fmt::Debug for LocalTypedToken<T> {
+    impl<T: ?Sized + 'static> fmt::Debug for LocalTypeToken<T> {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            f.debug_struct("TypedToken").finish()
+            f.debug_struct("LocalTypeToken").finish()
         }
     }
 
-    impl<T: ?Sized + 'static> LocalTypedToken<T> {
-        /// Initializes a `LocalTypedToken`.
+    impl<T: ?Sized + 'static> LocalTypeToken<T> {
+        /// Initializes a `LocalTypeToken`.
         pub fn new() -> Self {
             Self::try_new().unwrap()
         }
 
-        /// Initializes a `LocalTypedToken`, fails if it has already been initialized in the thread.
+        /// Initializes a `LocalTypeToken`, fails if it has already been initialized in the thread.
         pub fn try_new() -> Result<Self, AlreadyInitialized> {
-            if LOCAL_TYPED_TOKENS.with_borrow_mut(|types| types.insert(TypeId::of::<Self>())) {
+            if LOCAL_TYPE_TOKENS.with_borrow_mut(|types| types.insert(TypeId::of::<Self>())) {
                 Ok(Self(PhantomData))
             } else {
                 Err(AlreadyInitialized)
@@ -585,15 +585,15 @@ mod with_std {
         }
     }
 
-    impl<T: ?Sized + 'static> Drop for LocalTypedToken<T> {
+    impl<T: ?Sized + 'static> Drop for LocalTypeToken<T> {
         fn drop(&mut self) {
-            LOCAL_TYPED_TOKENS.with_borrow_mut(|types| types.remove(&TypeId::of::<Self>()));
+            LOCAL_TYPE_TOKENS.with_borrow_mut(|types| types.remove(&TypeId::of::<Self>()));
         }
     }
 
-    // SAFETY: `TypedToken` initialization guarantees there is only one single instance,
-    // taking into account that it's invariant on `T`
-    unsafe impl<T: ?Sized + 'static> Token for LocalTypedToken<T> {
+    // SAFETY: `LocalTypeToken` initialization guarantees there is only one single instance
+    // in the thread, taking into account that it's invariant on `T`
+    unsafe impl<T: ?Sized + 'static> Token for LocalTypeToken<T> {
         type Id = ();
 
         fn id(&self) -> Self::Id {}
