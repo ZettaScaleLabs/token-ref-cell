@@ -14,7 +14,7 @@
 //!
 //! The runtime cost is very lightweight: only one pointer comparison for
 //! [`TokenRefCell::borrow`]/[`TokenRefCell::borrow_mut`] when using [`BoxToken`]
-//! (and zero-cost when using [`singleton_token!`]).
+//! (and zero-cost when using zero-sized tokens like [`singleton_token!`]).
 //! <br>
 //! Because one token can be used with multiple cells, it's possible for example to use
 //! a single rwlock wrapping a token to synchronize mutable access to multiple `Arc` data.

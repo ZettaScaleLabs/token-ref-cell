@@ -22,6 +22,9 @@ pub use crate::repr_hack::TokenId;
 /// `TokenRefCell` being defined with `#[repr(transparent)]` when `Id` is `()`.
 /// It can be implemented using hidden `impl_token_id!` macro, for example
 /// `impl_token_id!(PtrId<T: ?Sized>)`.
+/// <br>
+/// This bound is temporary and will be removed when Rust type system will allow
+/// const expressions like `size_of::<Tk>() == 0` to be used as generic parameter.
 ///
 /// # Safety
 ///
@@ -111,17 +114,12 @@ impl<T: ?Sized> PartialEq for PtrId<T> {
 }
 impl<T: ?Sized> Eq for PtrId<T> {}
 
-/// Generate a singleton token type.
+/// Generate a zero-sized singleton token type.
 ///
 /// The generated type provides a `new` method, as well as a fallible
 /// `try_new` version. These methods ensure there is only a single
 /// instance of the singleton at a time; singleton can still be dropped
 /// and re-instantiated.
-///
-/// Contrary to other provided token types, the singleton token,
-/// as well as its id, are zero-sized. This makes it an (almost)
-/// zero-cost abstraction, the only (negligible) cost is an atomic swap
-/// at instantiation.
 #[macro_export]
 macro_rules! singleton_token {
     ($name:ident) => {
@@ -247,98 +245,66 @@ unsafe impl Token for DynamicToken {
     }
 }
 
-/// Abstraction of an exclusive/mutable reference as a token.
+/// Abstraction of a reference as a token.
 ///
-/// The reference should point to a pinned object, otherwise moving
-/// the object will "invalidate" the cells initialized with the
-/// previous reference.
+/// The reference should point to a pinned object, otherwise moving the object
+/// will "invalidate" the cells initialized with the previous reference.
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct RefMutToken<T: ?Sized>(T);
+pub struct RefToken<T: ?Sized>(T);
 
-impl<T: ?Sized> RefMutToken<T> {
-    /// Convert an immutable reference into an immutable `RefMutToken` reference.
+impl<T: ?Sized> RefToken<T> {
+    /// Convert an immutable reference into an immutable `RefToken` reference.
     #[inline]
-    pub fn from_ref(t: &T) -> &Self {
-        // SAFETY: `RefMutToken` is `repr(transparent)`
+    pub fn from_ref(t: &T) -> &Self
+    where
+        T: Unpin,
+    {
+        // SAFETY: `RefToken` is `repr(transparent)`
         unsafe { &*(t as *const T as *const Self) }
     }
 
-    /// Convert a mutable reference into a mutable `RefMutToken` reference.
+    /// Convert a mutable reference into a mutable `RefToken` reference.
     #[inline]
-    pub fn from_mut(t: &mut T) -> &mut Self {
-        // SAFETY: `RefMutToken` is `repr(transparent)`
+    pub fn from_mut(t: &mut T) -> &mut Self
+    where
+        T: Unpin,
+    {
+        // SAFETY: `RefToken` is `repr(transparent)`
         unsafe { &mut *(t as *mut T as *mut Self) }
     }
-}
 
-impl<T: ?Sized> Deref for RefMutToken<T> {
-    type Target = T;
-
+    /// Convert a pinned immutable reference into an immutable `RefToken` reference.
     #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: ?Sized> DerefMut for RefMutToken<T> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<'a, T: ?Sized> From<&'a T> for &'a RefMutToken<T> {
-    #[inline]
-    fn from(value: &'a T) -> Self {
-        RefMutToken::from_ref(value)
-    }
-}
-
-impl<'a, T: ?Sized> From<&'a mut T> for &'a mut RefMutToken<T> {
-    #[inline]
-    fn from(value: &'a mut T) -> Self {
-        RefMutToken::from_mut(value)
-    }
-}
-
-// SAFETY: token uniqueness is guaranteed by mutable reference properties
-unsafe impl<T: ?Sized> Token for RefMutToken<T> {
-    type Id = PtrId<T>;
-
-    #[inline]
-    fn id(&self) -> Self::Id {
-        (&self.0).into()
-    }
-
-    #[inline]
-    fn is_unique(&mut self) -> bool {
-        true
-    }
-}
-
-/// Abstraction of a pinned exclusive/mutable reference as a token.
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct PinToken<T: ?Sized>(T);
-
-impl<T: ?Sized> PinToken<T> {
-    /// Convert an immutable reference into an immutable `RefMutToken` reference.
-    #[inline]
-    pub fn from_ref(t: Pin<&T>) -> &Self {
-        // SAFETY: `PinToken` is `repr(transparent)`
+    pub fn from_pin(t: Pin<&T>) -> &Self {
+        // SAFETY: `RefToken` is `repr(transparent)`
         unsafe { &*(t.get_ref() as *const T as *const Self) }
     }
 
-    /// Convert a mutable reference into a mutable `RefMutToken` reference.
+    /// Convert a pinned mutable reference into a mutable `RefToken` reference.
     #[inline]
-    pub fn from_mut(t: Pin<&mut T>) -> &mut Self {
-        // SAFETY: mutable ref is never accessed and `RefMutToken` is `repr(transparent)`
+    pub fn from_pin_mut(t: Pin<&mut T>) -> &mut Self {
+        // SAFETY: mutable ref is never accessed if `T` is not `Unpin`,
+        // and `RefToken` is `repr(transparent)`
         unsafe { &mut *(t.get_unchecked_mut() as *mut T as *mut Self) }
+    }
+
+    /// Get a pinned immutable reference.
+    #[inline]
+    pub fn as_pin(&self) -> Pin<&T> {
+        // SAFETY: `RefToken` was initialized with pinned reference unless `T: Unpin`
+        unsafe { Pin::new_unchecked(&self.0) }
+    }
+
+    /// Get a pinned mutable reference.
+    #[inline]
+    pub fn as_pin_mut(&mut self) -> Pin<&mut T> {
+        // SAFETY: `PinToken` was initialized with pinned reference unless `T: Unpin`
+        unsafe { Pin::new_unchecked(&mut self.0) }
     }
 }
 
-impl<T: ?Sized> Deref for PinToken<T> {
+impl<T: ?Sized> Deref for RefToken<T> {
     type Target = T;
 
     #[inline]
@@ -347,29 +313,57 @@ impl<T: ?Sized> Deref for PinToken<T> {
     }
 }
 
-impl<T: ?Sized> DerefMut for PinToken<T> {
+impl<T: Unpin + ?Sized> DerefMut for RefToken<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<'a, T: ?Sized> From<Pin<&'a T>> for &'a PinToken<T> {
+impl<T: ?Sized> AsRef<T> for RefToken<T> {
     #[inline]
-    fn from(value: Pin<&'a T>) -> Self {
-        PinToken::from_ref(value)
+    fn as_ref(&self) -> &T {
+        &self.0
     }
 }
 
-impl<'a, T: ?Sized> From<Pin<&'a mut T>> for &'a mut PinToken<T> {
+impl<T: Unpin + ?Sized> AsMut<T> for RefToken<T> {
+    #[inline]
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+impl<'a, T: Unpin + ?Sized> From<&'a T> for &'a RefToken<T> {
+    #[inline]
+    fn from(value: &'a T) -> Self {
+        RefToken::from_ref(value)
+    }
+}
+
+impl<'a, T: Unpin + ?Sized> From<&'a mut T> for &'a mut RefToken<T> {
+    #[inline]
+    fn from(value: &'a mut T) -> Self {
+        RefToken::from_mut(value)
+    }
+}
+
+impl<'a, T: ?Sized> From<Pin<&'a T>> for &'a RefToken<T> {
+    #[inline]
+    fn from(value: Pin<&'a T>) -> Self {
+        RefToken::from_pin(value)
+    }
+}
+
+impl<'a, T: ?Sized> From<Pin<&'a mut T>> for &'a mut RefToken<T> {
     #[inline]
     fn from(value: Pin<&'a mut T>) -> Self {
-        PinToken::from_mut(value)
+        RefToken::from_pin_mut(value)
     }
 }
 
 // SAFETY: token uniqueness is guaranteed by mutable reference properties
-unsafe impl<T: ?Sized> Token for PinToken<T> {
+unsafe impl<T: ?Sized> Token for RefToken<T> {
     type Id = PtrId<T>;
 
     #[inline]
@@ -544,6 +538,12 @@ mod with_std {
         }
     }
 
+    impl<T: ?Sized + 'static> Default for TypeToken<T> {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     // SAFETY: `TypeToken` initialization guarantees there is only one single instance,
     // taking into account that it's invariant on `T`
     unsafe impl<T: ?Sized + 'static> Token for TypeToken<T> {
@@ -588,6 +588,12 @@ mod with_std {
     impl<T: ?Sized + 'static> Drop for LocalTypeToken<T> {
         fn drop(&mut self) {
             LOCAL_TYPE_TOKENS.with_borrow_mut(|types| types.remove(&TypeId::of::<Self>()));
+        }
+    }
+
+    impl<T: ?Sized + 'static> Default for LocalTypeToken<T> {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
