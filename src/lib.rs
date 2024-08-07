@@ -4,8 +4,11 @@
 #![deny(missing_debug_implementations)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
-//! This library provides [`TokenRefCell`], an interior mutability cell, which uses an
+//! This library provides [`TokenRefCell`], an interior mutability cell which uses an
 //! external [`Token`] reference to synchronize its accesses.
+//!
+//! Contrary to other standard cells like [`RefCell`](core::cell::RefCell),
+//! [`TokenRefCell`] is `Sync` as long as its token is `Send + Sync`.
 //!
 //! Multiple token [implementations](token) are provided, the easiest to use being the
 //! smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`
@@ -79,7 +82,10 @@ impl<T: ?Sized> Invariant<T> {
     }
 }
 
-/// Interior mutability cell using an external [`Token`] to synchronize accesses.
+/// Interior mutability cell using an external [`Token`] reference to synchronize accesses.
+///
+/// Contrary to other standard cells like [`RefCell`](core::cell::RefCell),
+/// `TokenRefCell` is `Sync` as long as its token is `Send + Sync`.
 ///
 /// # Memory layout
 ///
