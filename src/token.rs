@@ -11,7 +11,17 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[doc(hidden)]
+pub use crate::repr_hack::TokenId;
+
 /// Token type to be used with [`TokenRefCell`](crate::TokenRefCell).
+///
+/// It defines an `Id` type, which is stored in the cell and used to check its accesses.
+///
+/// `TokenId` bound is a hidden trait used to hack Rust type system in order to allow
+/// `TokenRefCell` being defined with `#[repr(transparent)]` when `Id` is `()`.
+/// It can be implemented using hidden `impl_token_id!` macro, for example
+/// `impl_token_id!(PtrId<T: ?Sized>)`.
 ///
 /// # Safety
 ///
@@ -20,23 +30,16 @@ use core::{
 /// if the token type is neither `Send` nor `Sync`, this unicity constraint is relaxed to the
 /// current thread.
 /// <br>
-/// Token implementations can rely on the fact that `TokenRefCell`, `Ref`, `RefMut`, `Reborrow`,
-/// and `ReborrowMut` are invariant on their `Tk: Token` generic parameter.
+/// Token implementations can rely on the fact that [`TokenRefCell`](crate::TokenRefCell),
+/// [`Ref`](crate::Ref), [`RefMut`](crate::RefMut), [`Reborrow`](crate::Reborrow),
+/// and [`ReborrowMut`](crate::ReborrowMut) are invariant on their `Tk: Token` generic parameter.
 pub unsafe trait Token {
     /// Id of the token.
-    type Id: Clone + Eq;
+    type Id: Clone + Eq + TokenId;
     /// Returns the token id.
     fn id(&self) -> Self::Id;
     /// Returns true if the token is "unique", see [safety](Self#safety)
     fn is_unique(&mut self) -> bool;
-}
-
-/// Const token that can be used with [`TokenRefCell::new_const`](crate::TokenRefCell::new_const).
-///
-/// Tokens generated with [`singleton_token!`](crate::singleton_token) macro implement this trait.
-pub trait ConstToken: Token {
-    /// Constant token id.
-    const ID: Self::Id;
 }
 
 /// Wrapper for pointer used as [`Token::Id`] .
@@ -247,7 +250,7 @@ unsafe impl Token for DynamicToken {
 /// Abstraction of an exclusive/mutable reference as a token.
 ///
 /// The reference should point to a pinned object, otherwise moving
-/// the object will "invalidate" the  cells initialized with the
+/// the object will "invalidate" the cells initialized with the
 /// previous reference.
 #[derive(Debug)]
 #[repr(transparent)]
@@ -506,10 +509,7 @@ mod with_std {
         marker::PhantomData, sync::Mutex,
     };
 
-    use crate::{
-        error::AlreadyInitialized,
-        token::{ConstToken, Token},
-    };
+    use crate::{error::AlreadyInitialized, token::Token};
 
     static TYPED_TOKENS: Mutex<BTreeSet<TypeId>> = Mutex::new(BTreeSet::new());
 
@@ -554,10 +554,6 @@ mod with_std {
         fn is_unique(&mut self) -> bool {
             true
         }
-    }
-
-    impl<T: ?Sized + 'static> ConstToken for TypedToken<T> {
-        const ID: Self::Id = ();
     }
 
     std::thread_local! {
@@ -606,10 +602,6 @@ mod with_std {
             true
         }
     }
-
-    impl<T: ?Sized + 'static> ConstToken for LocalTypedToken<T> {
-        const ID: Self::Id = ();
-    }
 }
 
 #[cfg(feature = "std")]
@@ -638,10 +630,6 @@ unsafe impl Token for LifetimeToken<'_> {
     fn is_unique(&mut self) -> bool {
         true
     }
-}
-
-impl<'id> ConstToken for LifetimeToken<'id> {
-    const ID: Self::Id = ();
 }
 
 #[cfg(feature = "generativity")]

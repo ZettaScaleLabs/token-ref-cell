@@ -1,7 +1,7 @@
 # token-ref-cell
 
 This library provides `TokenRefCell`, an interior mutability cell, which uses an
-external `Token` to synchronize its accesses.
+external `Token` reference to synchronize its accesses.
 
 Multiple token implementations are provided, the easiest to use being the
 smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`

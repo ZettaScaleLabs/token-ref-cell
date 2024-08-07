@@ -5,7 +5,7 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![forbid(clippy::undocumented_unsafe_blocks)]
 //! This library provides [`TokenRefCell`], an interior mutability cell, which uses an
-//! external [`Token`] to synchronize its accesses.
+//! external [`Token`] reference to synchronize its accesses.
 //!
 //! Multiple token [implementations](token) are provided, the easiest to use being the
 //! smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`
@@ -46,14 +46,21 @@ use core::{
 
 use crate::{
     error::{BorrowError, BorrowMutError},
-    token::{ConstToken, Token},
+    token::Token,
 };
 
 pub mod error;
+mod repr_hack;
 pub mod token;
 
 #[cfg(feature = "alloc")]
 pub use token::BoxToken;
+
+macro_rules! repr {
+    ($Tk:ident::$name:ident $($tt:tt)*) => {
+        <<<$Tk as Token>::Id as crate::repr_hack::TokenId>::CellRepr as crate::repr_hack::CellRepr<$Tk::Id>>::$name$($tt)*
+    };
+}
 
 // Outline panic formatting, see `RefCell` implementation
 macro_rules! unwrap {
@@ -65,52 +72,27 @@ macro_rules! unwrap {
     };
 }
 
-// Ensure `Tk` invariance to avoid subtyping.
-struct TokenId<Tk: Token + ?Sized> {
-    id: Tk::Id,
-    _phantom: PhantomData<fn(Tk) -> Tk>,
-}
-
-impl<Tk: Token + ?Sized> TokenId<Tk> {
-    const fn new(id: Tk::Id) -> Self {
-        let _phantom = PhantomData;
-        Self { id, _phantom }
-    }
-
-    fn id(&self) -> Tk::Id {
-        self.id.clone()
-    }
-}
-
-impl<Tk: Token + ?Sized> Clone for TokenId<Tk> {
-    fn clone(&self) -> Self {
-        Self::new(self.id.clone())
-    }
-}
-
-impl<Tk: Token + ?Sized> PartialEq for TokenId<Tk> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl<Tk: Token + ?Sized> fmt::Debug for TokenId<Tk>
-where
-    Tk::Id: fmt::Debug,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.id, f)
+struct Invariant<T: ?Sized>(PhantomData<fn(T) -> T>);
+impl<T: ?Sized> Invariant<T> {
+    fn new() -> Self {
+        Self(PhantomData)
     }
 }
 
 /// Interior mutability cell using an external [`Token`] to synchronize accesses.
+///
+/// # Memory layout
+///
+/// `TokenRefCell<T>` has the same in-memory representation as its inner type `T`
+/// when [`Token::Id`] is `()`.
+#[repr(transparent)]
 pub struct TokenRefCell<
     T: ?Sized,
     #[cfg(not(feature = "alloc"))] Tk: Token + ?Sized,
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
 > {
-    token_id: TokenId<Tk>,
-    cell: UnsafeCell<T>,
+    _invariant: Invariant<Tk>,
+    cell: repr!(Tk::Cell<T>),
 }
 
 impl<T: ?Sized, Tk: Token + ?Sized> AsRef<TokenRefCell<T, Tk>> for &TokenRefCell<T, Tk> {
@@ -126,7 +108,10 @@ unsafe impl<T: ?Sized + Sync, Tk: Token + ?Sized> Sync for TokenRefCell<T, Tk> w
 impl<T, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     /// Creates a new `TokenRefCell` containing a `value`, synchronized by the given `token`.
     #[inline]
-    pub fn new(value: T, token: &Tk) -> Self {
+    pub fn new(value: T, token: &Tk) -> Self
+    where
+        repr!(Tk::Cell<T>): Sized,
+    {
         Self::with_token_id(value, token.id())
     }
 
@@ -134,40 +119,50 @@ impl<T, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     #[inline]
     pub fn new_const(value: T) -> Self
     where
-        Tk: ConstToken,
+        Tk: Token<Id = ()>,
     {
-        Self::with_token_id(value, Tk::ID)
+        Self {
+            _invariant: Invariant::new(),
+            cell: UnsafeCell::new(value),
+        }
     }
 
     /// Creates a new `TokenRefCell` containing a `value`, synchronized by a token with the given id.
     ///
     /// It allows creating `TokenRefCell` when token is already borrowed.
     #[inline]
-    pub const fn with_token_id(value: T, token_id: Tk::Id) -> Self {
+    pub fn with_token_id(value: T, token_id: Tk::Id) -> Self
+    where
+        repr!(Tk::Cell<T>): Sized,
+    {
         Self {
-            token_id: TokenId::new(token_id),
-            cell: UnsafeCell::new(value),
+            _invariant: Invariant::new(),
+            cell: repr!(Tk::new)(value, token_id),
         }
     }
 
     /// Consumes the `TokenRefCell`, returning the wrapped value.
     #[inline]
-    pub fn into_inner(self) -> T {
-        self.cell.into_inner()
+    pub fn into_inner(self) -> T
+    where
+        repr!(Tk::Cell<T>): Sized,
+    {
+        repr!(Tk::inner(self.cell))
     }
 }
 
 impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     #[inline]
-    fn get_ref(&self, token_id: TokenId<Tk>) -> Result<Ref<T, Tk>, BorrowError> {
-        if self.token_id == token_id {
+    fn get_ref(&self, token_id: Tk::Id) -> Result<Ref<T, Tk>, BorrowError> {
+        if *repr!(Tk::token_id)(&self.cell) == token_id {
             Ok(Ref {
                 // SAFETY: `Token` trait guarantees that there can be only one token
                 // able to borrow the cell. Having a shared reference to this token
                 // ensures that the cell cannot be borrowed mutably.
-                inner: unsafe { &*self.cell.get() },
+                inner: unsafe { &*repr!(Tk::get(&self.cell)) },
                 token_id,
-                _phantom: PhantomData,
+                _invariant: Invariant::new(),
+                _token_ref: PhantomData,
             })
         } else {
             Err(BorrowError)
@@ -207,22 +202,23 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     /// or locks.
     #[inline]
     pub fn try_borrow<'a>(&'a self, token: &'a Tk) -> Result<Ref<'a, T, Tk>, BorrowError> {
-        self.get_ref(TokenId::new(token.id()))
+        self.get_ref(token.id())
     }
 
     /// # Safety
     ///
     /// Token id must be retrieved from a unique token.
     #[inline]
-    unsafe fn get_ref_mut(&self, token_id: TokenId<Tk>) -> Result<RefMut<T, Tk>, BorrowMutError> {
-        if self.token_id == token_id {
+    unsafe fn get_ref_mut(&self, token_id: Tk::Id) -> Result<RefMut<T, Tk>, BorrowMutError> {
+        if *repr!(Tk::token_id(&self.cell)) == token_id {
             Ok(RefMut {
                 // SAFETY: `Token` trait guarantees that there can be only one token
                 // able to borrow the cell. Having an exclusive reference to this token
                 // ensures that the cell is exclusively borrowed.
-                inner: unsafe { &mut *self.cell.get() },
+                inner: unsafe { &mut *repr!(Tk::get(&self.cell)) },
                 token_id,
-                _phantom: PhantomData,
+                _invariant: Invariant::new(),
+                _token_mut: PhantomData,
             })
         } else {
             Err(BorrowMutError::WrongToken)
@@ -272,19 +268,19 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
             return Err(BorrowMutError::NotUniqueToken);
         }
         // SAFETY: uniqueness is checked above
-        unsafe { self.get_ref_mut(TokenId::new(token.id())) }
+        unsafe { self.get_ref_mut(token.id()) }
     }
 
     /// Returns a mutable reference to the underlying data.
     #[inline]
     pub fn get_mut(&mut self) -> &mut T {
-        self.cell.get_mut()
+        repr!(Tk::get_mut(&mut self.cell))
     }
 
     /// Gets a mutable pointer to the wrapped value.
     #[inline]
     pub fn as_ptr(&self) -> *mut T {
-        self.cell.get()
+        repr!(Tk::get(&self.cell))
     }
 
     /// Set a new token to synchronize the cell.
@@ -296,13 +292,13 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     /// Get the id of the token by which the cell is synchronized.
     #[inline]
     pub fn token_id(&self) -> Tk::Id {
-        self.token_id.id()
+        repr!(Tk::token_id(&self.cell)).clone()
     }
 
     /// Set a new token_id to synchronize the cell.
     #[inline]
     pub fn set_token_id(&mut self, token_id: Tk::Id) {
-        self.token_id = TokenId::new(token_id);
+        repr!(Tk::set_token_id(&mut self.cell, token_id));
     }
 }
 
@@ -312,7 +308,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TokenRefCell")
-            .field("token", &self.token_id)
+            .field("token", repr!(Tk::token_id(&self.cell)))
             .finish_non_exhaustive()
     }
 }
@@ -328,8 +324,9 @@ pub struct Ref<
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
 > {
     inner: &'b T,
-    token_id: TokenId<Tk>,
-    _phantom: PhantomData<&'b Tk>,
+    token_id: Tk::Id,
+    _invariant: Invariant<Tk>,
+    _token_ref: PhantomData<&'b Tk>,
 }
 
 impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
@@ -351,7 +348,8 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
         Self {
             inner: this.inner,
             token_id: this.token_id.clone(),
-            _phantom: PhantomData,
+            _invariant: Invariant::new(),
+            _token_ref: PhantomData,
         }
     }
 
@@ -409,16 +407,17 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> Ref<'b, T, Tk> {
         state: impl FnOnce(&'a T) -> S,
     ) -> Reborrow<'a, S, Tk> {
         Reborrow {
-            state: state(self.inner),
             token_id: self.token_id.clone(),
+            _invariant: Invariant::new(),
             _phantom: PhantomData,
+            state: state(self.inner),
         }
     }
 
     /// Get the id of the borrowed token.
     #[inline]
     pub fn token_id(&self) -> Tk::Id {
-        self.token_id.id()
+        self.token_id.clone()
     }
 }
 
@@ -451,7 +450,8 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for Ref<'_, T, T
 
 /// Stateful wrapper around a borrowed token shared reference.
 pub struct Reborrow<'b, S: ?Sized, Tk: Token + ?Sized> {
-    token_id: TokenId<Tk>,
+    token_id: Tk::Id,
+    _invariant: Invariant<Tk>,
     _phantom: PhantomData<&'b Tk>,
     state: S,
 }
@@ -504,7 +504,7 @@ impl<'b, S: ?Sized, Tk: Token + ?Sized> Reborrow<'b, S, Tk> {
     /// Get the id of the borrowed token.
     #[inline]
     pub fn token_id(&self) -> Tk::Id {
-        self.token_id.id()
+        self.token_id.clone()
     }
 }
 
@@ -546,8 +546,9 @@ pub struct RefMut<
     #[cfg(feature = "alloc")] Tk: Token + ?Sized = BoxToken,
 > {
     inner: &'b mut T,
-    token_id: TokenId<Tk>,
-    _phantom: PhantomData<&'b mut Tk>,
+    token_id: Tk::Id,
+    _invariant: Invariant<Tk>,
+    _token_mut: PhantomData<&'b mut Tk>,
 }
 
 impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
@@ -561,7 +562,8 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         Ref {
             inner: self.inner,
             token_id: self.token_id.clone(),
-            _phantom: PhantomData,
+            _invariant: Invariant::new(),
+            _token_ref: PhantomData,
         }
     }
 
@@ -626,6 +628,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
         ReborrowMut {
             state: state(self.inner),
             token_id: self.token_id.clone(),
+            _invariant: Invariant::new(),
             _phantom: PhantomData,
         }
     }
@@ -633,7 +636,7 @@ impl<'b, T: ?Sized, Tk: Token + ?Sized> RefMut<'b, T, Tk> {
     /// Get the id of the borrowed token.
     #[inline]
     pub fn token_id(&self) -> Tk::Id {
-        self.token_id.id()
+        self.token_id.clone()
     }
 }
 
@@ -673,7 +676,8 @@ impl<T: ?Sized + fmt::Display, Tk: Token + ?Sized> fmt::Display for RefMut<'_, T
 
 /// Stateful wrapper around a borrowed token exclusive reference.
 pub struct ReborrowMut<'b, S: ?Sized, Tk: Token + ?Sized> {
-    token_id: TokenId<Tk>,
+    token_id: Tk::Id,
+    _invariant: Invariant<Tk>,
     _phantom: PhantomData<&'b mut Tk>,
     state: S,
 }
@@ -728,7 +732,7 @@ impl<S: ?Sized, Tk: Token + ?Sized> ReborrowMut<'_, S, Tk> {
     /// Get the id of the borrowed token.
     #[inline]
     pub fn token_id(&self) -> Tk::Id {
-        self.token_id.id()
+        self.token_id.clone()
     }
 }
 
