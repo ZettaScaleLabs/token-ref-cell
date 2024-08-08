@@ -2,6 +2,24 @@
 name = "token-ref-cell"
 version = "0.1.0"
 edition = "2021"
+exclude = [".*"]
+description = "Interior mutability cell using an external token to synchronize accesses"
+homepage = "https://github.com/ZettaScaleLabs/token-ref-cell"
+readme = "README.md"
+keywords = [
+  "cell",
+  "refcell",
+  "borrowing",
+]
+categories = [
+  "data-structures",
+  "memory-management",
+  "rust-patterns",
+  "concurrency",
+  "no-std",
+]
+license = "MIT"
+repository = "https://github.com/ZettaScaleLabs/token-ref-cell"
 
 [features]
 default = ["std"]
