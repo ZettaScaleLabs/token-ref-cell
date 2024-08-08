@@ -134,12 +134,13 @@ macro_rules! singleton_token {
         const _: () = {
             static INITIALIZED: ::core::sync::atomic::AtomicBool = ::core::sync::atomic::AtomicBool::new(false);
             impl $name {
-                #[inline]
                 $vis fn new() -> Self {
-                    Self::try_new().unwrap()
+                    match Self::try_new() {
+                        Ok(tk) => tk,
+                        Err(err) => err.panic(),
+                    }
                 }
 
-                #[inline]
                 $vis fn try_new() -> Result<Self, $crate::error::AlreadyInitialized> {
                     if INITIALIZED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
                         Err($crate::error::AlreadyInitialized)
@@ -151,7 +152,6 @@ macro_rules! singleton_token {
             }
 
             impl Drop for $name {
-                #[inline]
                 fn drop(&mut self) {
                     INITIALIZED.store(false, ::core::sync::atomic::Ordering::Relaxed);
                 }
@@ -168,10 +168,6 @@ macro_rules! singleton_token {
                 fn is_unique(&mut self) -> bool {
                     true
                 }
-            }
-
-            impl $crate::token::ConstToken for $name {
-                const ID: Self::Id = ();
             }
         };
     };
@@ -194,37 +190,20 @@ pub struct DynamicToken(usize);
 
 impl DynamicToken {
     /// Create a unique token.
-    #[inline]
+    ///
+    /// # Panics
+    ///
+    /// Panics when `usize::MAX` tokens has already been created.
     pub fn new() -> Self {
-        let token = DYNAMIC_COUNTER.fetch_add(1, Ordering::Relaxed);
-        if token > isize::MAX as usize {
-            #[inline(never)]
-            #[cold]
-            pub(crate) fn abort() -> ! {
-                #[cfg(feature = "std")]
-                {
-                    std::process::abort();
-                }
-                #[cfg(not(feature = "std"))]
-                {
-                    struct Abort;
-                    impl Drop for Abort {
-                        fn drop(&mut self) {
-                            panic!();
-                        }
-                    }
-                    let _a = Abort;
-                    panic!("abort");
-                }
-            }
-            abort();
+        let incr = |c| (c != usize::MAX).then(|| c + 1);
+        match DYNAMIC_COUNTER.fetch_update(Ordering::Relaxed, Ordering::Relaxed, incr) {
+            Ok(c) => Self(c + 1),
+            Err(_) => panic!("No more dynamic token available"),
         }
-        Self(token)
     }
 }
 
 impl Default for DynamicToken {
-    #[inline]
     fn default() -> Self {
         Self::new()
     }
