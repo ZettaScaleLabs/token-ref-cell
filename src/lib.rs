@@ -8,7 +8,8 @@
 //! external [`Token`] reference to synchronize its accesses.
 //!
 //! Contrary to other standard cells like [`RefCell`](core::cell::RefCell),
-//! [`TokenRefCell`] is `Sync` as long as its token is `Send + Sync`.
+//! [`TokenRefCell`] is `Sync` as long as its token is `Send + Sync`;
+//! it can thus be used in multithreaded programs.
 //!
 //! Multiple token [implementations](token) are provided, the easiest to use being the
 //! smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`

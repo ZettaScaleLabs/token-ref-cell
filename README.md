@@ -4,7 +4,7 @@ This library provides `TokenRefCell`, an interior mutability cell which uses an
 external `Token` reference to synchronize its accesses.
 
 Contrary to other standard cells like `RefCell`, `TokenRefCell` is `Sync` 
-as long as its token is `Send + Sync`.
+as long as its token is `Send + Sync`; it can thus be used in multithreaded programs.
 
 Multiple token implementations are provided, the easiest to use being the
 smart-pointer-based ones: every `Box<T>` can indeed be used as a token (as long as `T`
@@ -37,4 +37,15 @@ for cell in &arc_vec {
 drop(token_mut)
 ```
 
-*Based on https://crates.io/crates/token-cell concept.*
+## Why another crate?
+
+Many crates based on the same principle exists: [`qcell`](https://crates.io/crates/qcell), [`ghost-cell`](https://crates.io/crates/ghost-cell), [`token-cell`](https://crates.io/crates/token-cell), [`singleton-cell`](https://crates.io/crates/singleton-cell), etc.
+
+When I started writing `token-ref-cell`, I only knew `token-cell` one, as it was written by a guy previously working in the same company as me. But I wanted to take a new approach, notably designing an API closer than standard `RefCell` one, hence the name `TokenRefCell`. In fact, my goal was simple: to make the graph example compile, and for that I needed to enable "re-borrowing", i.e. reusing the token used in a mutable borrow to mutably borrow a "sub-cell". 
+
+When I was satisfied with the result, before publishing it, I search for other similar crates, and I found the list above, and realized I'd reimplemented the same concept as a bunch of people, especially `qcell` which uses a `Box` for its cell token/owner. However, this fresh implementation still has a few specificities which makes it relevant:
+- a familiar API close to `RefCell` one;
+- a unified API with a single `Token` trait, contrary to `qcell` which provides four different cell types;
+- a larger choice of token implementations, thanks to the simplicity of the `Token` trait: singleton types, smart-pointers, pinned/unpinned references, etc.;
+- `no_std` implementation, compatible with custom allocators (doesn't require `alloc` crate, and doesn't require allocator at all using `RefToken` for example);
+- re-borrowing.
