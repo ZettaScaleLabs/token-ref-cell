@@ -277,16 +277,27 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
         unsafe { self.get_ref_mut(token.id()) }
     }
 
+    /// Gets a mutable pointer to the wrapped value.
+    #[inline]
+    pub fn as_ptr(&self) -> *mut T {
+        repr!(Tk::get(&self.cell))
+    }
+
     /// Returns a mutable reference to the underlying data.
     #[inline]
     pub fn get_mut(&mut self) -> &mut T {
         repr!(Tk::get_mut(&mut self.cell))
     }
 
-    /// Gets a mutable pointer to the wrapped value.
+    /// Returns a `&TokenRefCell<T, Tk>` from a `&mut T`
     #[inline]
-    pub fn as_ptr(&self) -> *mut T {
-        repr!(Tk::get(&self.cell))
+    pub fn from_ref(t: &mut T) -> &Self
+    where
+        Tk: Token<Id = ()>,
+    {
+        // SAFETY: `&mut` ensures unique access, and `TokenRefCell<T>` has the same
+        // memory layout as `T`.
+        unsafe { &*(t as *mut T as *const TokenRefCell<T, Tk>) }
     }
 
     /// Set a new token to synchronize the cell.
@@ -305,6 +316,18 @@ impl<T: ?Sized, Tk: Token + ?Sized> TokenRefCell<T, Tk> {
     #[inline]
     pub fn set_token_id(&mut self, token_id: Tk::Id) {
         repr!(Tk::set_token_id(&mut self.cell, token_id));
+    }
+}
+
+impl<T, Tk: Token<Id = ()> + ?Sized> TokenRefCell<[T], Tk> {
+    /// Returns a `&[TokenRefCell<T>]` from a `&TokenRefCell<[T]>`
+    #[inline]
+    pub fn as_slice_of_cells(&self) -> &[TokenRefCell<T, Tk>]
+    where
+        Tk: Token<Id = ()>,
+    {
+        // SAFETY: `TokenRefCell<T>` has the same memory layout as `T`.
+        unsafe { &*(self as *const TokenRefCell<[T], Tk> as *const [TokenRefCell<T, Tk>]) }
     }
 }
 
