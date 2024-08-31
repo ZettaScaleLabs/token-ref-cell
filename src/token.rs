@@ -123,31 +123,36 @@ impl<T: ?Sized> Eq for PtrId<T> {}
 #[macro_export]
 macro_rules! singleton_token {
     ($name:ident) => {
-        $crate::singleton_token!(pub(self) struct $name);
+        $crate::singleton_token!(pub(self) struct $name;);
     };
     ($(#[$($attr:meta)*])* struct $name:ident;) => {
         $crate::singleton_token!($(#[$($attr)*])* pub(self) struct $name;);
     };
     ($(#[$($attr:meta)*])* $vis:vis struct $name:ident;) => {
         $(#[$($attr)*])*
+        #[allow(clippy::needless_pub_self)]
         $vis struct $name;
+        #[allow(unused, clippy::needless_pub_self)]
         const _: () = {
             static INITIALIZED: ::core::sync::atomic::AtomicBool = ::core::sync::atomic::AtomicBool::new(false);
             impl $name {
+                /// Instantiate the singleton token.
+                ///
+                /// # Panics
+                ///
+                /// Panics if the singleton token is already instantiated.
+                #[allow(clippy::new_without_default)]
                 $vis fn new() -> Self {
-                    match Self::try_new() {
-                        Ok(tk) => tk,
-                        Err(err) => err.panic(),
-                    }
+                    Self::try_new().unwrap()
                 }
 
+                /// Try to nstantiate the singleton token.
                 $vis fn try_new() -> Result<Self, $crate::error::AlreadyInitialized> {
                     match INITIALIZED.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed) {
                         Ok(_) => Ok(Self),
-                        Err(_) => Err($crate::error::AlreadyInitialized)
+                        Err(_) => Err($crate::error::AlreadyInitialized),
                     }
                 }
-
             }
 
             impl Drop for $name {
