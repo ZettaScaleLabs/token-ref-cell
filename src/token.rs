@@ -142,10 +142,9 @@ macro_rules! singleton_token {
                 }
 
                 $vis fn try_new() -> Result<Self, $crate::error::AlreadyInitialized> {
-                    if INITIALIZED.swap(true, ::core::sync::atomic::Ordering::Relaxed) {
-                        Err($crate::error::AlreadyInitialized)
-                    } else {
-                        Ok(Self)
+                    match INITIALIZED.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed) {
+                        Ok(_) => Ok(Self),
+                        Err(_) => Err($crate::error::AlreadyInitialized)
                     }
                 }
 
@@ -153,7 +152,7 @@ macro_rules! singleton_token {
 
             impl Drop for $name {
                 fn drop(&mut self) {
-                    INITIALIZED.store(false, ::core::sync::atomic::Ordering::Relaxed);
+                    INITIALIZED.store(false, ::core::sync::atomic::Ordering::Release);
                 }
             }
 
